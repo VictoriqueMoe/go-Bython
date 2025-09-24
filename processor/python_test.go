@@ -425,3 +425,113 @@ func TestProcessReader(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, expected, builder.String())
 }
+
+func TestDictionaryCreation(t *testing.T) {
+	//given
+	input := `dict = {};
+dict["key"] = "value";
+dict["number"] = 42;`
+
+	expected := `dict = {}
+dict["key"] = "value"
+dict["number"] = 42
+`
+
+	p := NewPythonPreprocessor(2)
+
+	//when
+	result := p.ProcessString(input)
+
+	//then
+	assert.Equal(t, expected, result)
+}
+
+func TestDictionaryWithBraces(t *testing.T) {
+	//given
+	input := `config = {"name": "test", "value": 123};
+data = {"users": ["alice", "bob"], "count": 2};`
+
+	expected := `config = {"name": "test", "value": 123}
+data = {"users": ["alice", "bob"], "count": 2}
+`
+
+	p := NewPythonPreprocessor(2)
+
+	//when
+	result := p.ProcessString(input)
+
+	//then
+	assert.Equal(t, expected, result)
+}
+
+func TestDictionaryInControlFlow(t *testing.T) {
+	//given
+	input := `if user_data {
+    settings = {};
+    settings["theme"] = "dark";
+    result = {"status": "ok", "data": settings};
+}`
+
+	expected := `if user_data:
+  settings = {}
+  settings["theme"] = "dark"
+  result = {"status": "ok", "data": settings}
+`
+
+	p := NewPythonPreprocessor(2)
+
+	//when
+	result := p.ProcessString(input)
+
+	//then
+	assert.Equal(t, expected, result)
+}
+
+func TestDictionaryWithFStrings(t *testing.T) {
+	//given
+	input := `user = {"name": "Alice", "age": 30};
+for key in user {
+    print(f"Key: {key}, Value: {user[key]}");
+}`
+
+	expected := `user = {"name": "Alice", "age": 30}
+for key in user:
+  print(f"Key: {key}, Value: {user[key]}")
+`
+
+	p := NewPythonPreprocessor(2)
+
+	//when
+	result := p.ProcessString(input)
+
+	//then
+	assert.Equal(t, expected, result)
+}
+
+func TestMultilineDictionary(t *testing.T) {
+	//given
+	input := `config = {
+  "name": "test",
+  "value": 123,
+  "nested": {
+    "key": "value"
+  }
+};`
+
+	expected := `config = {
+  "name": "test",
+  "value": 123,
+  "nested": {
+    "key": "value"
+  }
+}
+`
+
+	p := NewPythonPreprocessor(2)
+
+	//when
+	result := p.ProcessString(input)
+
+	//then
+	assert.Equal(t, expected, result)
+}

@@ -9,16 +9,21 @@ import (
 )
 
 type PythonPreprocessor struct {
-	indentSize  int
-	indentChar  string
-	indentLevel int
+	indentSize       int
+	indentChar       string
+	indentLevel      int
+	structuralBlocks int
+	dictDepth        int
+	dictBaseIndent   int
 }
 
 func NewPythonPreprocessor(indentSize int) *PythonPreprocessor {
 	return &PythonPreprocessor{
-		indentSize:  indentSize,
-		indentChar:  strings.Repeat(" ", indentSize),
-		indentLevel: 0,
+		indentSize:       indentSize,
+		indentChar:       strings.Repeat(" ", indentSize),
+		indentLevel:      0,
+		structuralBlocks: 0,
+		dictDepth:        0,
 	}
 }
 
@@ -37,15 +42,64 @@ func (p *PythonPreprocessor) processLine(line string) []string {
 	}
 
 	if strings.HasPrefix(trimmed, "}") {
-		p.indentLevel--
-		remaining := strings.TrimSpace(trimmed[1:])
-
-		if strings.HasPrefix(remaining, "else") || strings.HasPrefix(remaining, "elif") {
-			return p.processLine(remaining)
-		} else if remaining != "" {
-			return p.processLine(remaining)
+		if p.dictDepth > 0 {
+			p.dictDepth--
+			leadingSpaces := len(line) - len(strings.TrimLeft(line, " \t"))
+			relativeIndent := leadingSpaces - p.dictBaseIndent
+			indentLevels := relativeIndent / p.indentSize
+			if relativeIndent > 0 && indentLevels == 0 {
+				indentLevels = 1
+			}
+			normalizedIndent := strings.Repeat(p.indentChar, indentLevels)
+			processedLine := normalizedIndent + strings.TrimSuffix(trimmed, ";")
+			if p.dictDepth == 0 {
+				p.dictBaseIndent = 0
+			}
+			return []string{processedLine}
 		}
-		return []string{}
+
+		if p.structuralBlocks > 0 {
+			p.indentLevel--
+			p.structuralBlocks--
+
+			remaining := strings.TrimSpace(trimmed[1:])
+
+			if strings.HasPrefix(remaining, "else") || strings.HasPrefix(remaining, "elif") {
+				return p.processLine(remaining)
+			} else if remaining != "" {
+				return p.processLine(remaining)
+			}
+			return []string{}
+		}
+
+		processedLine := strings.TrimSuffix(trimmed, ";")
+		return []string{p.indent() + processedLine}
+	}
+
+	if p.dictDepth > 0 {
+		leadingSpaces := len(line) - len(strings.TrimLeft(line, " \t"))
+		relativeIndent := leadingSpaces - p.dictBaseIndent
+		indentLevels := relativeIndent / p.indentSize
+		if relativeIndent > 0 && indentLevels == 0 {
+			indentLevels = 1
+		}
+		normalizedIndent := strings.Repeat(p.indentChar, indentLevels)
+		processedLine := normalizedIndent + strings.TrimSuffix(trimmed, ";")
+		openBraces := strings.Count(processedLine, "{")
+		closeBraces := strings.Count(processedLine, "}")
+		p.dictDepth += openBraces - closeBraces
+		return []string{processedLine}
+	}
+
+	dictBraceIndex := p.findDictionaryBrace(trimmed)
+	if dictBraceIndex != -1 {
+		p.dictBaseIndent = len(line) - len(strings.TrimLeft(line, " \t"))
+		p.dictDepth = 1
+		openBraces := strings.Count(trimmed, "{")
+		closeBraces := strings.Count(trimmed, "}")
+		p.dictDepth = openBraces - closeBraces
+		processedLine := p.indent() + strings.TrimSuffix(trimmed, ";")
+		return []string{processedLine}
 	}
 
 	needsColon := false
@@ -54,6 +108,11 @@ func (p *PythonPreprocessor) processLine(line string) []string {
 	if openBraceIndex != -1 {
 		beforeBrace := strings.TrimSpace(trimmed[:openBraceIndex])
 		afterBrace := strings.TrimSpace(trimmed[openBraceIndex+1:])
+
+		if !p.isControlStatement(beforeBrace) {
+			processedLine := strings.TrimSuffix(trimmed, ";")
+			return []string{p.indent() + processedLine}
+		}
 
 		if p.isControlStatement(beforeBrace) {
 			needsColon = true
@@ -67,6 +126,7 @@ func (p *PythonPreprocessor) processLine(line string) []string {
 		result := []string{p.indent() + processedLine}
 
 		p.indentLevel++
+		p.structuralBlocks++
 
 		if afterBrace != "" && afterBrace != "}" {
 			if strings.HasSuffix(afterBrace, "}") {
@@ -76,6 +136,7 @@ func (p *PythonPreprocessor) processLine(line string) []string {
 					result = append(result, p.indent()+content)
 				}
 				p.indentLevel--
+				p.structuralBlocks--
 			} else {
 				afterBrace = strings.TrimSuffix(afterBrace, ";")
 				result = append(result, p.indent()+afterBrace)
@@ -133,6 +194,9 @@ func (p *PythonPreprocessor) findStructuralBrace(line string) int {
 		}
 
 		if ch == '{' && !inString {
+			if p.isDictionaryBrace(line, i) {
+				continue
+			}
 			return i
 		}
 
@@ -152,6 +216,64 @@ func (p *PythonPreprocessor) findStructuralBrace(line string) int {
 		}
 	}
 	return -1
+}
+
+func (p *PythonPreprocessor) findDictionaryBrace(line string) int {
+	inString := false
+	stringChar := rune(0)
+	inFString := false
+
+	for i := 0; i < len(line); i++ {
+		ch := line[i]
+
+		if i > 0 && (line[i-1] == 'f' || line[i-1] == 'F') && (ch == '"' || ch == '\'') {
+			inFString = true
+		}
+
+		if (ch == '"' || ch == '\'') && (i == 0 || line[i-1] != '\\') {
+			if !inString {
+				inString = true
+				stringChar = rune(ch)
+			} else if rune(ch) == stringChar {
+				inString = false
+				stringChar = 0
+				inFString = false
+			}
+		}
+
+		if ch == '{' && !inString {
+			before := strings.TrimSpace(line[:i])
+			if strings.HasSuffix(before, "=") || strings.HasSuffix(before, ":") || strings.HasSuffix(before, "(") || strings.HasSuffix(before, "[") || strings.HasSuffix(before, ",") {
+				return i
+			}
+		}
+
+		if ch == '{' && inFString {
+			depth := 1
+			for j := i + 1; j < len(line); j++ {
+				if line[j] == '{' {
+					depth++
+				} else if line[j] == '}' {
+					depth--
+					if depth == 0 {
+						i = j
+						break
+					}
+				}
+			}
+		}
+	}
+	return -1
+}
+
+func (p *PythonPreprocessor) isDictionaryBrace(line string, braceIndex int) bool {
+	before := strings.TrimSpace(line[:braceIndex])
+
+	if strings.HasSuffix(before, "=") || strings.HasSuffix(before, ":") || strings.HasSuffix(before, "(") || strings.HasSuffix(before, "[") || strings.HasSuffix(before, ",") {
+		return true
+	}
+
+	return false
 }
 
 func (p *PythonPreprocessor) ProcessReader(reader io.Reader, writer io.Writer) error {
@@ -176,6 +298,8 @@ func (p *PythonPreprocessor) ProcessReader(reader io.Reader, writer io.Writer) e
 
 func (p *PythonPreprocessor) ProcessFile(inputPath, outputPath string) error {
 	p.indentLevel = 0
+	p.structuralBlocks = 0
+	p.dictDepth = 0
 
 	inputFile, err := os.Open(inputPath)
 	if err != nil {
@@ -194,6 +318,8 @@ func (p *PythonPreprocessor) ProcessFile(inputPath, outputPath string) error {
 
 func (p *PythonPreprocessor) ProcessString(input string) string {
 	p.indentLevel = 0
+	p.structuralBlocks = 0
+	p.dictDepth = 0
 	reader := strings.NewReader(input)
 	var builder strings.Builder
 	builder.Grow(len(input) + len(input)/4)
