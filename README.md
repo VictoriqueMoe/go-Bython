@@ -135,9 +135,48 @@ if __name__ == "__main__":
 - Classes: `class`
 - Exception handling: `try`, `except`, `finally`
 - Context managers: `with`
+- Dictionaries and sets (including multiline)
+- Dict/set comprehensions
 - Comments
 - F-strings and string literals
 - Nested blocks
+
+## Caveats
+
+### Opening Brace Style
+
+The opening brace `{` **must be on the same line** as the control statement, not on a new line.
+
+**Supported (K&R/1TBS style):**
+```python
+if condition {
+    statement;
+}
+```
+
+**Not supported (Allman style):**
+```python
+if condition
+{
+    statement;
+}
+```
+
+### Single-Line Statements
+
+Single-line control statements with braces on the same line are **not supported**.
+
+**Not supported:**
+```python
+if (firsttick == False) {sys.stdout.write('\033[F')}
+```
+
+**Workaround - use multiple lines:**
+```python
+if (firsttick == False) {
+    sys.stdout.write('\033[F');
+}
+```
 
 ## Architecture
 
