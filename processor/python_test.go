@@ -685,3 +685,74 @@ func TestNestedDictSet(t *testing.T) {
 	//then
 	assert.Equal(t, expected, result)
 }
+
+func TestDeepNesting(t *testing.T) {
+	//given
+	input := `import time, sys
+
+firsttick = True
+print()
+for hour in range(0,23) {
+    for minute in range(0,60) {
+        for second in range(0,60) {
+            if (firsttick == False) {
+                sys.stdout.write('\033[F')
+                } # Move cursor up one line
+            time.sleep(1)
+            print(f"{hour}:{minute}:{second}")
+            firsttick = False
+            }
+        }
+    }`
+
+	expected := `import time, sys
+
+firsttick = True
+print()
+for hour in range(0,23):
+  for minute in range(0,60):
+    for second in range(0,60):
+      if (firsttick == False):
+        sys.stdout.write('\033[F')
+      # Move cursor up one line
+      time.sleep(1)
+      print(f"{hour}:{minute}:{second}")
+      firsttick = False
+`
+
+	p := NewPythonPreprocessor(2)
+
+	//when
+	result := p.ProcessString(input)
+
+	//then
+	assert.Equal(t, expected, result)
+}
+
+func TestSetOfSets(t *testing.T) {
+	//given
+	input := `def top() {
+    def second() {
+    multiset = {{1,2},{3,4},{5,6}}
+    print(multiset)
+    }
+}
+
+top()`
+
+	expected := `def top():
+  def second():
+    multiset = {{1,2},{3,4},{5,6}}
+    print(multiset)
+
+top()
+`
+
+	p := NewPythonPreprocessor(2)
+
+	//when
+	result := p.ProcessString(input)
+
+	//then
+	assert.Equal(t, expected, result)
+}
