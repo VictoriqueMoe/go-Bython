@@ -17,7 +17,7 @@ type PythonPreprocessor struct {
 	dictBaseIndent   int
 }
 
-func NewPythonPreprocessor(indentSize int) *PythonPreprocessor {
+func NewPythonPreprocessor(indentSize int) Processor {
 	return &PythonPreprocessor{
 		indentSize:       indentSize,
 		indentChar:       strings.Repeat(" ", indentSize),
@@ -349,4 +349,8 @@ func (p *PythonPreprocessor) ProcessString(input string) string {
 	builder.Grow(len(input) + len(input)/4)
 	_ = p.ProcessReader(reader, &builder)
 	return builder.String()
+}
+
+func (p *PythonPreprocessor) IndentSize() int {
+	return p.indentSize
 }
