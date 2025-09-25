@@ -178,6 +178,50 @@ if (firsttick == False) {
 }
 ```
 
+### Brace-Style Only
+
+This tool **only processes brace-style Python** and converts it to standard Python indentation. It does not process files that are already in standard Python format.
+
+**Input must use brace-style syntax:**
+```python
+def function_one() {
+    print("Using braces");
+}
+
+def function_two() {
+    print("Also using braces");
+    if condition {
+        return True;
+    }
+}
+```
+
+**Not supported - standard Python input:**
+```python
+# This won't be processed correctly - it's already standard Python!
+def function_one():
+    print("Standard Python")
+
+def function_two():
+    print("Also standard Python")
+    if condition:
+        return True
+```
+
+**Not supported - mixing styles in one file:**
+```python
+# Brace style
+def function_one() {
+    print("Using braces");
+}
+
+# Standard Python style mixed in - will cause issues!
+def function_two():
+    print("Using colons and indentation")
+    if condition:
+        return True
+```
+
 ## Architecture
 
 ```
