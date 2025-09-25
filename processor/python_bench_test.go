@@ -16,7 +16,8 @@ func BenchmarkSimpleIfElse(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = p.ProcessString(input)
+		result, _ := p.ProcessString(input)
+		_ = result
 	}
 }
 
@@ -37,7 +38,8 @@ func BenchmarkNestedBlocks(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = p.ProcessString(input)
+		result, _ := p.ProcessString(input)
+		_ = result
 	}
 }
 
@@ -75,7 +77,8 @@ func BenchmarkClassWithMethods(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = p.ProcessString(input)
+		result, _ := p.ProcessString(input)
+		_ = result
 	}
 }
 
@@ -140,7 +143,8 @@ if __name__ == "__main__" {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = p.ProcessString(input)
+		result, _ := p.ProcessString(input)
+		_ = result
 	}
 }
 
@@ -165,7 +169,8 @@ func BenchmarkLargeFile(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = p.ProcessString(input)
+		result, _ := p.ProcessString(input)
+		_ = result
 	}
 }
 
@@ -202,7 +207,8 @@ class Person {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = p.ProcessString(input)
+		result, _ := p.ProcessString(input)
+		_ = result
 	}
 }
 
@@ -221,7 +227,8 @@ func BenchmarkParallel(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		p := NewPythonPreprocessor(2)
 		for pb.Next() {
-			_ = p.ProcessString(input)
+			result, _ := p.ProcessString(input)
+			_ = result
 		}
 	})
 }

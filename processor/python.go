@@ -3,6 +3,7 @@ package processor
 import (
 	"bufio"
 	"fmt"
+	"go-Bython/syntax"
 	"io"
 	"os"
 	"strings"
@@ -15,6 +16,7 @@ type PythonPreprocessor struct {
 	structuralBlocks int
 	dictDepth        int
 	dictBaseIndent   int
+	syntaxEngines    *syntax.Factory
 }
 
 func NewPythonPreprocessor(indentSize int) Processor {
@@ -24,6 +26,7 @@ func NewPythonPreprocessor(indentSize int) Processor {
 		indentLevel:      0,
 		structuralBlocks: 0,
 		dictDepth:        0,
+		syntaxEngines:    syntax.NewFactory(),
 	}
 }
 
@@ -303,9 +306,17 @@ func (p *PythonPreprocessor) isDictionaryBrace(line string, braceIndex int) bool
 func (p *PythonPreprocessor) ProcessReader(reader io.Reader, writer io.Writer) error {
 	scanner := bufio.NewScanner(reader)
 	first := true
+	lineNumber := 0
 
 	for scanner.Scan() {
-		lines := p.processLine(scanner.Text())
+		lineNumber++
+		lineText := scanner.Text()
+
+		if err := p.syntaxEngines.CheckAllEngines(lineText, lineNumber); err != nil {
+			return err
+		}
+
+		lines := p.processLine(lineText)
 		for _, line := range lines {
 			if line != "" || !first {
 				_, err := fmt.Fprintln(writer, line)
@@ -324,6 +335,7 @@ func (p *PythonPreprocessor) ProcessFile(inputPath, outputPath string) error {
 	p.indentLevel = 0
 	p.structuralBlocks = 0
 	p.dictDepth = 0
+	p.syntaxEngines.ResetAllEngines()
 
 	inputFile, err := os.Open(inputPath)
 	if err != nil {
@@ -340,15 +352,19 @@ func (p *PythonPreprocessor) ProcessFile(inputPath, outputPath string) error {
 	return p.ProcessReader(inputFile, outputFile)
 }
 
-func (p *PythonPreprocessor) ProcessString(input string) string {
+func (p *PythonPreprocessor) ProcessString(input string) (string, error) {
 	p.indentLevel = 0
 	p.structuralBlocks = 0
 	p.dictDepth = 0
+	p.syntaxEngines.ResetAllEngines()
 	reader := strings.NewReader(input)
 	var builder strings.Builder
 	builder.Grow(len(input) + len(input)/4)
-	_ = p.ProcessReader(reader, &builder)
-	return builder.String()
+	err := p.ProcessReader(reader, &builder)
+	if err != nil {
+		return "", err
+	}
+	return builder.String(), nil
 }
 
 func (p *PythonPreprocessor) IndentSize() int {
