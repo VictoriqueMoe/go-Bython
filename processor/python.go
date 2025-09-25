@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"regexp"
 	"strings"
 )
 
@@ -154,8 +153,29 @@ func (p *PythonPreprocessor) processLine(line string) []string {
 }
 
 func (p *PythonPreprocessor) handleSingleLineBraces(line string) string {
-	re := regexp.MustCompile(`lambda\s+([^{]+?)\s*\{([^}]*)\}`)
-	return re.ReplaceAllString(line, `lambda $1: $2`)
+	lambdaIdx := strings.Index(line, "lambda")
+	if lambdaIdx == -1 {
+		return line
+	}
+
+	openBrace := strings.Index(line[lambdaIdx:], "{")
+	if openBrace == -1 {
+		return line
+	}
+	openBrace += lambdaIdx
+
+	closeBrace := strings.Index(line[openBrace:], "}")
+	if closeBrace == -1 {
+		return line
+	}
+	closeBrace += openBrace
+
+	before := line[:lambdaIdx]
+	args := strings.TrimSpace(line[lambdaIdx+6 : openBrace])
+	body := strings.TrimSpace(line[openBrace+1 : closeBrace])
+	after := line[closeBrace+1:]
+
+	return before + "lambda " + args + ": " + body + after
 }
 
 func (p *PythonPreprocessor) isControlStatement(line string) bool {
