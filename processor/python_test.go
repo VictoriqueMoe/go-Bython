@@ -845,3 +845,307 @@ return self.value
 	assert.NoError(t, err)
 	assert.Equal(t, expected, result)
 }
+
+// Detailed mixed syntax detection tests
+func TestMixedSyntax_DetectGoBythonFirst(t *testing.T) {
+	//given
+	p := NewPythonPreprocessor(4).(*PythonPreprocessor)
+
+	//when - first line with go-Bython style
+	err1 := p.checkMixedSyntax("def foo() {", 1)
+	//then
+	assert.NoError(t, err1)
+
+	//when - second line with standard Python style should error
+	err2 := p.checkMixedSyntax("def bar():", 2)
+	//then
+	assert.Error(t, err2)
+	assert.Contains(t, err2.Error(), "mixed syntax detected")
+	assert.Contains(t, err2.Error(), "standard Python colon syntax found at line 2")
+	assert.Contains(t, err2.Error(), "go-Bython braces were detected at line 1")
+}
+
+func TestMixedSyntax_DetectStandardPythonFirst(t *testing.T) {
+	//given
+	p := NewPythonPreprocessor(4).(*PythonPreprocessor)
+
+	//when - first line with standard Python style
+	err1 := p.checkMixedSyntax("def foo():", 1)
+	//then
+	assert.NoError(t, err1)
+
+	//when - second line with go-Bython style should error
+	err2 := p.checkMixedSyntax("def bar() {", 2)
+	//then
+	assert.Error(t, err2)
+	assert.Contains(t, err2.Error(), "mixed syntax detected")
+	assert.Contains(t, err2.Error(), "go-Bython style brace found at line 2")
+	assert.Contains(t, err2.Error(), "standard Python indentation was detected at line 1")
+}
+
+func TestMixedSyntax_ConsistentGoBythonStyle(t *testing.T) {
+	//given
+	p := NewPythonPreprocessor(4).(*PythonPreprocessor)
+
+	//when - all go-Bython style
+	err1 := p.checkMixedSyntax("def foo() {", 1)
+	err2 := p.checkMixedSyntax("    if x > 0 {", 2)
+	err3 := p.checkMixedSyntax("        print('hello');", 3)
+	err4 := p.checkMixedSyntax("    }", 4)
+	err5 := p.checkMixedSyntax("}", 5)
+
+	//then - no errors
+	assert.NoError(t, err1)
+	assert.NoError(t, err2)
+	assert.NoError(t, err3)
+	assert.NoError(t, err4)
+	assert.NoError(t, err5)
+}
+
+func TestMixedSyntax_ConsistentStandardPythonStyle(t *testing.T) {
+	//given
+	p := NewPythonPreprocessor(4).(*PythonPreprocessor)
+
+	//when - all standard Python style
+	err1 := p.checkMixedSyntax("def foo():", 1)
+	err2 := p.checkMixedSyntax("    if x > 0:", 2)
+	err3 := p.checkMixedSyntax("        print('hello')", 3)
+
+	//then - no errors
+	assert.NoError(t, err1)
+	assert.NoError(t, err2)
+	assert.NoError(t, err3)
+}
+
+func TestMixedSyntax_SkipCommentsAndEmptyLines(t *testing.T) {
+	//given
+	p := NewPythonPreprocessor(4).(*PythonPreprocessor)
+
+	//when - comments and empty lines should be ignored
+	err1 := p.checkMixedSyntax("# This is a comment", 1)
+	err2 := p.checkMixedSyntax("", 2)
+	err3 := p.checkMixedSyntax("   ", 3)
+	err4 := p.checkMixedSyntax("def foo() {", 4)
+	err5 := p.checkMixedSyntax("# Another comment", 5)
+
+	//then - no errors
+	assert.NoError(t, err1)
+	assert.NoError(t, err2)
+	assert.NoError(t, err3)
+	assert.NoError(t, err4)
+	assert.NoError(t, err5)
+}
+
+func TestMixedSyntax_DetectControlStatements(t *testing.T) {
+	//given
+	p := NewPythonPreprocessor(4).(*PythonPreprocessor)
+
+	testCases := []struct {
+		name string
+		line string
+	}{
+		{"if statement", "if condition:"},
+		{"elif statement", "elif other_condition:"},
+		{"else statement", "else:"},
+		{"while statement", "while True:"},
+		{"for statement", "for i in range(10):"},
+		{"def statement", "def function():"},
+		{"class statement", "class MyClass:"},
+		{"try statement", "try:"},
+		{"except statement", "except Exception:"},
+		{"finally statement", "finally:"},
+		{"with statement", "with open('file') as f:"},
+		{"main statement", "if __name__ == \"__main__\":"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			//when
+			err := p.checkMixedSyntax(tc.line, 1)
+			//then
+			assert.NoError(t, err)
+		})
+	}
+}
+
+func TestMixedSyntax_DetectStructuralBraces(t *testing.T) {
+	//given
+	p := NewPythonPreprocessor(4).(*PythonPreprocessor)
+
+	testCases := []struct {
+		name string
+		line string
+	}{
+		{"function with brace", "def foo() {"},
+		{"if with brace", "if condition {"},
+		{"class with brace", "class MyClass {"},
+		{"while with brace", "while True {"},
+		{"for with brace", "for i in range(10) {"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			//when
+			err := p.checkMixedSyntax(tc.line, 1)
+			//then
+			assert.NoError(t, err)
+		})
+	}
+}
+
+func TestMixedSyntax_IgnoreDictionaryBraces(t *testing.T) {
+	//given
+	p := NewPythonPreprocessor(4).(*PythonPreprocessor)
+
+	testCases := []struct {
+		name string
+		line string
+	}{
+		{"dictionary assignment", "data = {'key': 'value'}"},
+		{"dictionary in function call", "func({'key': 'value'})"},
+		{"dictionary return", "return {'key': 'value'}"},
+		{"nested dictionary", "data = {'outer': {'inner': 'value'}}"},
+		{"dictionary with colon", "config: {'setting': True}"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			//when
+			err := p.checkMixedSyntax(tc.line, 1)
+			//then
+			assert.NoError(t, err, "Dictionary braces should not be detected as structural braces")
+		})
+	}
+}
+
+func TestMixedSyntax_IgnoreFStringBraces(t *testing.T) {
+	//given
+	p := NewPythonPreprocessor(4).(*PythonPreprocessor)
+
+	testCases := []struct {
+		name string
+		line string
+	}{
+		{"f-string", "print(f'Hello {name}')"},
+		{"F-string uppercase", "print(F'Value: {value}')"},
+		{"nested f-string", "print(f'Outer {f\"Inner {x}\"}')"},
+		{"complex f-string", "print(f'Result: {func(a, b)}')"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			//when
+			err := p.checkMixedSyntax(tc.line, 1)
+			//then
+			assert.NoError(t, err, "F-string braces should not be detected as structural braces")
+		})
+	}
+}
+
+func TestMixedSyntax_IgnoreStringLiterals(t *testing.T) {
+	//given
+	p := NewPythonPreprocessor(4).(*PythonPreprocessor)
+
+	testCases := []struct {
+		name string
+		line string
+	}{
+		{"string with braces", "text = 'This has { and } braces'"},
+		{"double quote string", "text = \"This has { and } braces\""},
+		{"string with escaped quotes", "text = 'Don\\'t ignore { braces }'"},
+		{"multiline string start", "text = '''Start {'''"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			//when
+			err := p.checkMixedSyntax(tc.line, 1)
+			//then
+			assert.NoError(t, err, "Braces inside strings should be ignored")
+		})
+	}
+}
+
+func TestMixedSyntax_ProcessStringReset(t *testing.T) {
+	//given
+	p := NewPythonPreprocessor(4)
+
+	//when - process a go-Bython style string
+	result1, err1 := p.ProcessString("def foo() {\n    print('hello')\n}")
+	assert.NoError(t, err1)
+	assert.NotEmpty(t, result1)
+
+	//when - process a standard Python style string (should work after reset)
+	result2, err2 := p.ProcessString("def bar():\n    print('world')")
+	assert.NoError(t, err2)
+	assert.NotEmpty(t, result2)
+}
+
+func TestMixedSyntax_LineNumbersInErrors(t *testing.T) {
+	//given
+	p := NewPythonPreprocessor(4).(*PythonPreprocessor)
+
+	//when - establish standard Python at line 10
+	err1 := p.checkMixedSyntax("def foo():", 10)
+	assert.NoError(t, err1)
+
+	//when - try go-Bython at line 25
+	err := p.checkMixedSyntax("def bar() {", 25)
+
+	//then - error should contain both line numbers
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "line 25")
+	assert.Contains(t, err.Error(), "line 10")
+}
+
+func TestMixedSyntax_ComplexMixedScenario(t *testing.T) {
+	//given
+	p := NewPythonPreprocessor(4).(*PythonPreprocessor)
+	lines := []struct {
+		line       string
+		lineNumber int
+		shouldErr  bool
+	}{
+		{"# Header comment", 1, false},
+		{"", 2, false},
+		{"def fibonacci(n):", 3, false},                  // Establish standard Python
+		{"    if n <= 1:", 4, false},                     // Consistent standard Python
+		{"        return n", 5, false},                   // Not a control statement
+		{"    else:", 6, false},                          // Consistent standard Python
+		{"        return fib(n-1) + fib(n-2)", 7, false}, // Not a control statement
+		{"", 8, false},
+		{"# This should cause an error", 9, false},
+		{"def factorial(n) {", 10, true}, // Mixed! Should error
+	}
+
+	for _, test := range lines {
+		//when
+		err := p.checkMixedSyntax(test.line, test.lineNumber)
+
+		//then
+		if test.shouldErr {
+			assert.Error(t, err, "Expected error at line %d: %s", test.lineNumber, test.line)
+			assert.Contains(t, err.Error(), "mixed syntax detected")
+		} else {
+			assert.NoError(t, err, "Unexpected error at line %d: %s", test.lineNumber, test.line)
+		}
+	}
+}
+
+func TestMixedSyntax_FullProcessingWithMixedSyntax(t *testing.T) {
+	//given
+	p := NewPythonPreprocessor(4)
+	input := `def foo():
+    print('standard python')
+
+def bar() {
+    print('go-bython style')
+}`
+
+	//when
+	_, err := p.ProcessString(input)
+
+	//then
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "mixed syntax detected")
+}

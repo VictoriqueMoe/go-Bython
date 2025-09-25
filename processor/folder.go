@@ -9,17 +9,20 @@ import (
 )
 
 type FolderProcessor struct {
-	processor   Processor
+	indentSize  int
 	filePattern string
 	workers     int
 }
 
-func NewFolderProcessor(processor Processor, filePattern string, workers int) *FolderProcessor {
+func NewFolderProcessor(indentSize int, filePattern string, workers int) *FolderProcessor {
 	if workers <= 0 {
 		workers = 4
 	}
+	if indentSize <= 0 {
+		indentSize = 4
+	}
 	return &FolderProcessor{
-		processor:   processor,
+		indentSize:  indentSize,
 		filePattern: filePattern,
 		workers:     workers,
 	}
@@ -81,7 +84,7 @@ func (f *FolderProcessor) processFilesConcurrently(inputDir, outputDir string, f
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			localProcessor := NewPythonPreprocessor(f.processor.IndentSize())
+			localProcessor := NewPythonPreprocessor(f.indentSize)
 			for file := range jobs {
 				relPath, err := filepath.Rel(inputDir, file)
 				if err != nil {

@@ -41,8 +41,7 @@ func TestFolderProcessor(t *testing.T) {
 		}
 	}
 
-	p := NewPythonPreprocessor(2)
-	fp := NewFolderProcessor(p, "*.py", 2)
+	fp := NewFolderProcessor(2, "*.py", 2)
 
 	expectedFiles := map[string]string{
 		"test1.py": `if x > 0:
@@ -92,8 +91,7 @@ func TestFolderProcessorWithPattern(t *testing.T) {
 		}
 	}
 
-	p := NewPythonPreprocessor(2)
-	fp := NewFolderProcessor(p, "*.pybrace", 2)
+	fp := NewFolderProcessor(4, "*.pybrace", 2)
 
 	//when
 	err := fp.ProcessFolder(inputDir, outputDir)

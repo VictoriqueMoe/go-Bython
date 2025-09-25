@@ -3,20 +3,29 @@ package processor
 import (
 	"bufio"
 	"fmt"
-	"go-Bython/syntax"
 	"io"
 	"os"
 	"strings"
 )
 
+type SyntaxStyle int
+
+const (
+	StyleUnknown SyntaxStyle = iota
+	StyleStandardPython
+	StyleGoBython
+)
+
 type PythonPreprocessor struct {
-	indentSize       int
-	indentChar       string
-	indentLevel      int
-	structuralBlocks int
-	dictDepth        int
-	dictBaseIndent   int
-	syntaxEngines    *syntax.Factory
+	indentSize         int
+	indentChar         string
+	indentLevel        int
+	structuralBlocks   int
+	dictDepth          int
+	dictBaseIndent     int
+	detectedStyle      SyntaxStyle
+	standardPythonLine int
+	goBythonLine       int
 }
 
 func NewPythonPreprocessor(indentSize int) Processor {
@@ -26,7 +35,7 @@ func NewPythonPreprocessor(indentSize int) Processor {
 		indentLevel:      0,
 		structuralBlocks: 0,
 		dictDepth:        0,
-		syntaxEngines:    syntax.NewFactory(),
+		detectedStyle:    StyleUnknown,
 	}
 }
 
@@ -312,7 +321,7 @@ func (p *PythonPreprocessor) ProcessReader(reader io.Reader, writer io.Writer) e
 		lineNumber++
 		lineText := scanner.Text()
 
-		if err := p.syntaxEngines.CheckAllEngines(lineText, lineNumber); err != nil {
+		if err := p.checkMixedSyntax(lineText, lineNumber); err != nil {
 			return err
 		}
 
@@ -335,7 +344,9 @@ func (p *PythonPreprocessor) ProcessFile(inputPath, outputPath string) error {
 	p.indentLevel = 0
 	p.structuralBlocks = 0
 	p.dictDepth = 0
-	p.syntaxEngines.ResetAllEngines()
+	p.detectedStyle = StyleUnknown
+	p.standardPythonLine = 0
+	p.goBythonLine = 0
 
 	inputFile, err := os.Open(inputPath)
 	if err != nil {
@@ -356,7 +367,9 @@ func (p *PythonPreprocessor) ProcessString(input string) (string, error) {
 	p.indentLevel = 0
 	p.structuralBlocks = 0
 	p.dictDepth = 0
-	p.syntaxEngines.ResetAllEngines()
+	p.detectedStyle = StyleUnknown
+	p.standardPythonLine = 0
+	p.goBythonLine = 0
 	reader := strings.NewReader(input)
 	var builder strings.Builder
 	builder.Grow(len(input) + len(input)/4)
@@ -369,4 +382,40 @@ func (p *PythonPreprocessor) ProcessString(input string) (string, error) {
 
 func (p *PythonPreprocessor) IndentSize() int {
 	return p.indentSize
+}
+
+func (p *PythonPreprocessor) checkMixedSyntax(line string, lineNumber int) error {
+	trimmed := strings.TrimSpace(line)
+
+	// Skip empty lines and comments
+	if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+		return nil
+	}
+
+	// Check for go-Bython style (braces)
+	hasStructuralBrace := p.findStructuralBrace(trimmed) != -1
+	if hasStructuralBrace {
+		if p.detectedStyle == StyleStandardPython {
+			return fmt.Errorf("mixed syntax detected: go-Bython style brace found at line %d, but standard Python indentation was detected at line %d", lineNumber, p.standardPythonLine)
+		}
+		if p.detectedStyle == StyleUnknown {
+			p.detectedStyle = StyleGoBython
+			p.goBythonLine = lineNumber
+		}
+		return nil
+	}
+
+	// Check for standard Python style (control statements with colons and indented blocks)
+	if p.isControlStatement(trimmed) && strings.HasSuffix(trimmed, ":") {
+		if p.detectedStyle == StyleGoBython {
+			return fmt.Errorf("mixed syntax detected: standard Python colon syntax found at line %d, but go-Bython braces were detected at line %d", lineNumber, p.goBythonLine)
+		}
+		if p.detectedStyle == StyleUnknown {
+			p.detectedStyle = StyleStandardPython
+			p.standardPythonLine = lineNumber
+		}
+		return nil
+	}
+
+	return nil
 }

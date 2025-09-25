@@ -30,7 +30,7 @@ func main() {
 		}
 
 		start := time.Now()
-		fp := processor.NewFolderProcessor(p, *filePattern, *workers)
+		fp := processor.NewFolderProcessor(*indentSize, *filePattern, *workers)
 		if err := fp.ProcessFolder(*inputDir, *outputDir); err != nil {
 			log.Fatal(err)
 			return
