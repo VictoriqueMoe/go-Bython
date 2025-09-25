@@ -39,8 +39,18 @@ func NewPythonPreprocessor(indentSize int) Processor {
 	}
 }
 
-var controlKeywords = []string{
-	"if ", "elif ", "else", "while ", "for ", "def ", "class ", "try", "except", "finally", "with ",
+var controlKeywords = map[string]bool{
+	"if ":     true,
+	"elif ":   true,
+	"else":    true,
+	"while ":  true,
+	"for ":    true,
+	"def ":    true,
+	"class ":  true,
+	"try":     true,
+	"except":  true,
+	"finally": true,
+	"with ":   true,
 }
 
 func (p *PythonPreprocessor) processLine(line string) []string {
@@ -165,7 +175,7 @@ func (p *PythonPreprocessor) processLine(line string) []string {
 }
 
 func (p *PythonPreprocessor) isControlStatement(line string) bool {
-	for _, keyword := range controlKeywords {
+	for keyword := range controlKeywords {
 		if strings.HasPrefix(line, keyword) || line == strings.TrimSpace(keyword) {
 			return true
 		}
@@ -182,80 +192,40 @@ func (p *PythonPreprocessor) indent() string {
 	return strings.Repeat(p.indentChar, p.indentLevel)
 }
 
-func (p *PythonPreprocessor) findStructuralBrace(line string) int {
-	inString := false
-	stringChar := rune(0)
-	inFString := false
-
-	for i := 0; i < len(line); i++ {
-		ch := line[i]
-
-		if i > 0 && (line[i-1] == 'f' || line[i-1] == 'F') && (ch == '"' || ch == '\'') {
-			inFString = true
-		}
-
-		if (ch == '"' || ch == '\'') && (i == 0 || line[i-1] != '\\') {
-			if !inString {
-				inString = true
-				stringChar = rune(ch)
-			} else if rune(ch) == stringChar {
-				inString = false
-				stringChar = 0
-				inFString = false
-			}
-		}
-
-		if ch == '{' && !inString {
-			if p.isDictionaryBrace(line, i) {
-				continue
-			}
-			return i
-		}
-
-		if ch == '{' && inFString {
-			depth := 1
-			for j := i + 1; j < len(line); j++ {
-				if line[j] == '{' {
-					depth++
-				} else if line[j] == '}' {
-					depth--
-					if depth == 0 {
-						i = j
-						break
-					}
-				}
-			}
-		}
-	}
-	return -1
+// stringParser holds the state for parsing strings and f-strings
+type stringParser struct {
+	inString   bool
+	stringChar rune
+	inFString  bool
 }
 
-func (p *PythonPreprocessor) findDictionaryBrace(line string) int {
-	inString := false
-	stringChar := rune(0)
-	inFString := false
+// parseBraces finds braces while properly handling strings and f-strings
+func (p *PythonPreprocessor) parseBraces(line string, findStructural bool) int {
+	parser := stringParser{}
 	dictBraceIndex := -1
 	depth := 0
 
 	for i := 0; i < len(line); i++ {
 		ch := line[i]
 
+		// Detect f-string start
 		if i > 0 && (line[i-1] == 'f' || line[i-1] == 'F') && (ch == '"' || ch == '\'') {
-			inFString = true
+			parser.inFString = true
 		}
 
+		// Handle string quotes
 		if (ch == '"' || ch == '\'') && (i == 0 || line[i-1] != '\\') {
-			if !inString {
-				inString = true
-				stringChar = rune(ch)
-			} else if rune(ch) == stringChar {
-				inString = false
-				stringChar = 0
-				inFString = false
+			if !parser.inString {
+				parser.inString = true
+				parser.stringChar = rune(ch)
+			} else if rune(ch) == parser.stringChar {
+				parser.inString = false
+				parser.stringChar = 0
+				parser.inFString = false
 			}
 		}
 
-		if ch == '{' && inFString {
+		if ch == '{' && parser.inFString {
 			depth := 1
 			for j := i + 1; j < len(line); j++ {
 				if line[j] == '{' {
@@ -271,20 +241,29 @@ func (p *PythonPreprocessor) findDictionaryBrace(line string) int {
 			continue
 		}
 
-		if ch == '{' && !inString {
-			before := strings.TrimSpace(line[:i])
-			if strings.HasSuffix(before, ")") {
-				continue
-			}
-			if strings.HasSuffix(before, "=") || strings.HasSuffix(before, ":") || strings.HasSuffix(before, "(") || strings.HasSuffix(before, "[") || strings.HasSuffix(before, ",") || strings.HasSuffix(before, "return") {
-				if dictBraceIndex == -1 {
-					dictBraceIndex = i
+		if ch == '{' && !parser.inString {
+			if findStructural {
+				if p.isDictionaryBrace(line, i) {
+					continue
 				}
-				depth++
+				return i
+			} else {
+				before := strings.TrimSpace(line[:i])
+				if strings.HasSuffix(before, ")") {
+					continue
+				}
+				if strings.HasSuffix(before, "=") || strings.HasSuffix(before, ":") ||
+					strings.HasSuffix(before, "(") || strings.HasSuffix(before, "[") ||
+					strings.HasSuffix(before, ",") || strings.HasSuffix(before, "return") {
+					if dictBraceIndex == -1 {
+						dictBraceIndex = i
+					}
+					depth++
+				}
 			}
 		}
 
-		if ch == '}' && !inString && depth > 0 {
+		if ch == '}' && !parser.inString && !findStructural && depth > 0 {
 			depth--
 			if depth == 0 {
 				dictBraceIndex = -1
@@ -292,10 +271,22 @@ func (p *PythonPreprocessor) findDictionaryBrace(line string) int {
 		}
 	}
 
+	if findStructural {
+		return -1
+	}
+
 	if depth > 0 {
 		return dictBraceIndex
 	}
 	return -1
+}
+
+func (p *PythonPreprocessor) findStructuralBrace(line string) int {
+	return p.parseBraces(line, true)
+}
+
+func (p *PythonPreprocessor) findDictionaryBrace(line string) int {
+	return p.parseBraces(line, false)
 }
 
 func (p *PythonPreprocessor) isDictionaryBrace(line string, braceIndex int) bool {
@@ -321,11 +312,12 @@ func (p *PythonPreprocessor) ProcessReader(reader io.Reader, writer io.Writer) e
 		lineNumber++
 		lineText := scanner.Text()
 
+		lines := p.processLine(lineText)
+
+		// Only check mixed syntax if we processed something that could be mixed
 		if err := p.checkMixedSyntax(lineText, lineNumber); err != nil {
 			return err
 		}
-
-		lines := p.processLine(lineText)
 		for _, line := range lines {
 			if line != "" || !first {
 				_, err := fmt.Fprintln(writer, line)
@@ -385,36 +377,44 @@ func (p *PythonPreprocessor) IndentSize() int {
 }
 
 func (p *PythonPreprocessor) checkMixedSyntax(line string, lineNumber int) error {
+	if len(line) == 0 {
+		return nil
+	}
+
 	trimmed := strings.TrimSpace(line)
 
-	// Skip empty lines and comments
-	if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+	if trimmed == "" || trimmed[0] == '#' {
 		return nil
 	}
 
-	// Check for go-Bython style (braces)
-	hasStructuralBrace := p.findStructuralBrace(trimmed) != -1
-	if hasStructuralBrace {
-		if p.detectedStyle == StyleStandardPython {
-			return fmt.Errorf("mixed syntax detected: go-Bython style brace found at line %d, but standard Python indentation was detected at line %d", lineNumber, p.standardPythonLine)
-		}
-		if p.detectedStyle == StyleUnknown {
-			p.detectedStyle = StyleGoBython
-			p.goBythonLine = lineNumber
-		}
+	if !strings.ContainsAny(trimmed, "{}:") {
 		return nil
 	}
 
-	// Check for standard Python style (control statements with colons and indented blocks)
-	if p.isControlStatement(trimmed) && strings.HasSuffix(trimmed, ":") {
-		if p.detectedStyle == StyleGoBython {
-			return fmt.Errorf("mixed syntax detected: standard Python colon syntax found at line %d, but go-Bython braces were detected at line %d", lineNumber, p.goBythonLine)
+	if strings.ContainsRune(trimmed, '{') {
+		hasStructuralBrace := p.findStructuralBrace(trimmed) != -1
+		if hasStructuralBrace {
+			if p.detectedStyle == StyleStandardPython {
+				return fmt.Errorf("mixed syntax detected: go-Bython style brace found at line %d, but standard Python indentation was detected at line %d", lineNumber, p.standardPythonLine)
+			}
+			if p.detectedStyle == StyleUnknown {
+				p.detectedStyle = StyleGoBython
+				p.goBythonLine = lineNumber
+			}
+			return nil
 		}
-		if p.detectedStyle == StyleUnknown {
-			p.detectedStyle = StyleStandardPython
-			p.standardPythonLine = lineNumber
+	}
+
+	if strings.ContainsRune(trimmed, ':') && strings.HasSuffix(trimmed, ":") {
+		if p.isControlStatement(trimmed) {
+			if p.detectedStyle == StyleGoBython {
+				return fmt.Errorf("mixed syntax detected: standard Python colon syntax found at line %d, but go-Bython braces were detected at line %d", lineNumber, p.goBythonLine)
+			}
+			if p.detectedStyle == StyleUnknown {
+				p.detectedStyle = StyleStandardPython
+				p.standardPythonLine = lineNumber
+			}
 		}
-		return nil
 	}
 
 	return nil
