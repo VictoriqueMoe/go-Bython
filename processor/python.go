@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 )
 
@@ -32,7 +33,7 @@ var controlKeywords = []string{
 }
 
 func (p *PythonPreprocessor) processLine(line string) []string {
-	trimmed := strings.TrimSpace(line)
+	trimmed := strings.TrimSpace(p.handleSingleLineBraces(line))
 	if trimmed == "" {
 		return []string{""}
 	}
@@ -150,6 +151,11 @@ func (p *PythonPreprocessor) processLine(line string) []string {
 	processedLine = strings.TrimSuffix(processedLine, ";")
 
 	return []string{p.indent() + processedLine}
+}
+
+func (p *PythonPreprocessor) handleSingleLineBraces(line string) string {
+	re := regexp.MustCompile(`lambda\s+([^{]+?)\s*\{([^}]*)\}`)
+	return re.ReplaceAllString(line, `lambda $1: $2`)
 }
 
 func (p *PythonPreprocessor) isControlStatement(line string) bool {
