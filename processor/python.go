@@ -27,18 +27,8 @@ func NewPythonPreprocessor(indentSize int) Processor {
 	}
 }
 
-var controlKeywords = map[string]bool{
-	"if ":     true,
-	"elif ":   true,
-	"else":    true,
-	"while ":  true,
-	"for ":    true,
-	"def ":    true,
-	"class ":  true,
-	"try":     true,
-	"except":  true,
-	"finally": true,
-	"with ":   true,
+var controlKeywords = []string{
+	"if ", "elif ", "else", "while ", "for ", "def ", "class ", "try", "except", "finally", "with ",
 }
 
 func (p *PythonPreprocessor) processLine(line string) []string {
@@ -163,7 +153,7 @@ func (p *PythonPreprocessor) processLine(line string) []string {
 }
 
 func (p *PythonPreprocessor) isControlStatement(line string) bool {
-	for keyword := range controlKeywords {
+	for _, keyword := range controlKeywords {
 		if strings.HasPrefix(line, keyword) || line == strings.TrimSpace(keyword) {
 			return true
 		}
