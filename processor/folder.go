@@ -1,11 +1,14 @@
 package processor
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"go-Bython/internal/bython/diagnostic"
 )
 
 type FolderProcessor struct {
@@ -81,9 +84,7 @@ func (f *FolderProcessor) processFilesConcurrently(inputDir, outputDir string, f
 	var wg sync.WaitGroup
 
 	for i := 0; i < f.workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			localProcessor := NewPythonPreprocessor(f.indentSize)
 			for file := range jobs {
 				relPath, err := filepath.Rel(inputDir, file)
@@ -109,7 +110,7 @@ func (f *FolderProcessor) processFilesConcurrently(inputDir, outputDir string, f
 
 				results <- result{file, nil}
 			}
-		}()
+		})
 	}
 
 	for _, file := range files {
@@ -122,19 +123,24 @@ func (f *FolderProcessor) processFilesConcurrently(inputDir, outputDir string, f
 		close(results)
 	}()
 
-	var errors []string
+	var failures []string
 	processed := 0
 
 	for res := range results {
-		if res.err != nil {
-			errors = append(errors, fmt.Sprintf("%s: %v", res.file, res.err))
-		} else {
+		if res.err == nil {
 			processed++
+			continue
+		}
+
+		if _, ok := errors.AsType[*diagnostic.SyntaxError](res.err); ok {
+			failures = append(failures, res.err.Error())
+		} else {
+			failures = append(failures, fmt.Sprintf("%s: %v", res.file, res.err))
 		}
 	}
 
-	if len(errors) > 0 {
-		return fmt.Errorf("processed %d files with %d errors:\n%s", processed, len(errors), strings.Join(errors, "\n"))
+	if len(failures) > 0 {
+		return fmt.Errorf("processed %d files with %d errors:\n%s", processed, len(failures), strings.Join(failures, "\n"))
 	}
 
 	return nil

@@ -4,18 +4,19 @@ A Go-based preprocessor that converts brace-style Python syntax to standard Pyth
 
 ## Overview
 
-Inspired by [Bython](https://github.com/mathialo/bython),
-go-Bython allows you to write Python code using braces `{}` instead of indentation, similar to languages like C, Java,
-or JavaScript. The preprocessor automatically converts your brace-style code to standard Python with proper indentation.
+Inspired by [Bython](https://github.com/mathialo/bython), go-Bython allows you to write Python code using braces `{}` instead of indentation, similar to languages like C, Java, or JavaScript. The preprocessor converts your brace-style code to standard Python with proper indentation.
+
+Source is processed by a real lexer and parser, not line-by-line pattern matching, so a `{` is classified by its grammatical position (block, dict, set or comprehension) and malformed input is reported with a precise `line:column` error instead of producing broken output.
 
 ## Features
 
+- **Real lexer and parser** - Full Python tokenisation, including all string forms and nested f-strings (PEP 701)
+- **Precise errors** - Unbalanced braces, unterminated strings, stray clauses and similar mistakes fail with `file:line:column: message`, and no output file is written
 - **Fast concurrent processing** - Process multiple files in parallel using goroutines
 - **Batch processing** - Convert entire directories recursively
 - **Pattern matching** - Filter files by custom patterns (e.g., `*.py`, `*.pybrace`)
-- **Configurable indentation** - Choose your preferred indent size (2 or 4 spaces)
-- **Smart brace detection** - Ignores braces inside strings and f-strings
-- **Supports all Python constructs** - if/elif/else, loops, functions, classes, try/except, with statements
+- **Configurable indentation** - Choose your preferred indent size
+- **Source fidelity** - Expressions, comments and string literals (including multi-line strings) are copied exactly; only block structure and trailing semicolons change
 
 ## Installation
 
@@ -130,161 +131,90 @@ if __name__ == "__main__":
 ## Supported Python Constructs
 
 - Control flow: `if`, `elif`, `else`
-- Loops: `for`, `while`
-- Functions: `def`
-- Classes: `class`
-- Exception handling: `try`, `except`, `finally`
-- Context managers: `with`
-- Dictionaries and sets (including multiline)
-- Dict/set comprehensions
-- Comments
-- F-strings and string literals
-- Nested blocks
+- Loops: `for`, `while`, including `for`/`else` and `while`/`else`
+- Functions and classes: `def`, `class`, decorators, `async def`
+- Exception handling: `try`, `except`, `except*`, `else`, `finally`
+- Context managers: `with`, `async with`, parenthesised `with` items
+- Pattern matching: `match` / `case` (and `match` still works as an ordinary name)
+- Dictionaries, sets and comprehensions, including multi-line and inside block headers (`if x == {} {`)
+- One-line blocks: `if x { return 1 }`, nested `if a { if b { c() } }`
+- Empty blocks: `def f() {}` becomes `def f():` with `pass`
+- Brace on its own line (Allman style)
+- Multiple statements per line separated by `;`
+- Comments, including after braces (`} # note`)
+- All string forms: raw, bytes, triple-quoted, f-strings and t-strings, with braces inside them left untouched
+- `\` line continuations and multi-line bracketed expressions
+- CRLF line endings, tabs and a UTF-8 byte-order mark
 
 ## Caveats
 
-### Opening Brace Style
-
-The opening brace `{` **must be on the same line** as the control statement, not on a new line.
-
-**Supported (K&R/1TBS style):**
-```python
-if condition {
-    statement;
-}
-```
-
-**Not supported (Allman style):**
-```python
-if condition
-{
-    statement;
-}
-```
-
-### Single-Line Statements
-
-Single-line control statements with braces on the same line are **not supported**.
-
-**Not supported:**
-```python
-if (firsttick == False) {sys.stdout.write('\033[F')}
-```
-
-**Workaround - use multiple lines:**
-```python
-if (firsttick == False) {
-    sys.stdout.write('\033[F');
-}
-```
-
 ### Brace-Style Only
 
-This tool **only processes brace-style Python** and converts it to standard Python indentation. It does not process files that are already in standard Python format.
+This tool **only processes brace-style Python**. A colon-style block such as `if x:` is rejected with an error:
 
-**Input must use brace-style syntax:**
-```python
-def function_one() {
-    print("Using braces");
-}
-
-def function_two() {
-    print("Also using braces");
-    if condition {
-        return True;
-    }
-}
+```text
+input.py:1:5: expected '{' to open the 'if' block (Bython blocks use '{', not ':')
 ```
 
-**Not supported - standard Python input:**
-```python
-# This won't be processed correctly - it's already standard Python!
-def function_one():
-    print("Standard Python")
+The same applies to files already written in standard Python and to files that mix the two styles. A colon followed by a brace (`if x: {`) is tolerated.
 
-def function_two():
-    print("Also standard Python")
-    if condition:
-        return True
-```
+### Expressions Are Not Validated
 
-**Not supported - mixing styles in one file:**
-```python
-# Brace style
-def function_one() {
-    print("Using braces");
-}
-
-# Standard Python style mixed in - will cause issues!
-def function_two():
-    print("Using colons and indentation")
-    if condition:
-        return True
-```
+Statements and block structure are fully parsed, but expressions are only checked for balanced brackets and obvious mistakes such as two values with no operator between them. Anything subtler (for example an invalid number like `1__2`) passes through and is reported by Python when the output runs.
 
 ## Architecture
 
 ```
 go-Bython/
-├── main.go                 # CLI entry point
+├── main.go                    # CLI entry point
+├── internal/bython/
+│   ├── translate.go           # Translate: lex, parse, emit
+│   ├── token/                 # Token kinds, keywords, source positions
+│   ├── diagnostic/            # Syntax errors with line:column
+│   ├── lexer/                 # Tokeniser, including f-string scanning
+│   ├── ast/                   # Statement and block AST
+│   ├── parser/                # Recursive-descent parser and brace classification
+│   └── emitter/               # Writes indented Python from the AST
 ├── processor/
-│   ├── processor.go        # Processor interface
-│   ├── python.go          # Python preprocessor implementation
-│   ├── python_test.go     # Unit tests
-│   ├── folder.go          # Folder/batch processing
-│   └── folder_test.go     # Folder processing tests
+│   ├── processor.go           # Processor interface
+│   ├── python.go              # Adapter over internal/bython
+│   └── folder.go              # Folder/batch processing
 └── README.md
 ```
 
 ## Performance
 
-go-Bython is designed for speed and efficiency, using concurrency to process files in parallel.
-
-### Benchmark Results
-
 Tested on AMD Ryzen 9 9950X3D (16-Core Processor):
 
-| Benchmark                  | Time/op | Memory/op | Allocs/op |
-|----------------------------|---------|-----------|-----------|
-| Simple if/else             | 989 ns  | 4.46 KB   | 16        |
-| Nested blocks (5 levels)   | 1.22 μs | 4.74 KB   | 27        |
-| Class with methods         | 2.68 μs | 6.26 KB   | 68        |
-| Complex program            | 5.22 μs | 8.60 KB   | 143       |
-| Large file (100 functions) | 49.0 μs | 44.2 KB   | 1504      |
-| String with braces         | 1.49 μs | 5.04 KB   | 29        |
-| Parallel processing        | 613 ns  | 4.95 KB   | 27        |
+| Benchmark                  | Time/op  | Memory/op | Allocs/op |
+|----------------------------|----------|-----------|-----------|
+| Simple if/else             | 652 ns   | 352 B     | 2         |
+| Nested blocks (5 levels)   | 1.04 μs  | 480 B     | 2         |
+| Class with methods         | 3.18 μs  | 961 B     | 2         |
+| Complex program            | 6.66 μs  | 1.67 KB   | 2         |
+| Large file (100 functions) | 80.6 μs  | 22.7 KB   | 6         |
+| Process reader             | 852 ns   | 1.08 KB   | 7         |
+| String with braces         | 1.37 μs  | 512 B     | 2         |
+| Parallel processing        | 238 ns   | 496 B     | 2         |
 
-**So... this means:**
-
-- **~1 million simple statements/second** on a single core
-- **~192,000 complex statements/second** with nested structures
-- **~20,400 functions/second** for large files
-- **Efficient f-string handling** with braces in strings
-- **Linear scalability** with concurrent processing
-
-### Real-world Performance
-
-- A typical 100-line Python file processes in **~10 microseconds**
-- A 1000-file codebase can be processed in **under 1 second** with 8 workers
-- Memory efficient: ~44KB per 100 functions
-- Optimised string processing with pre-allocated buffers
+Lexer, parser and AST storage are pooled and reused between calls, so steady-state translation makes only a couple of allocations regardless of file size.
 
 Run benchmarks yourself:
 
 ```bash
-go test -bench=. -benchmem ./processor
+go test -run '^$' -bench . -benchmem ./processor
 ```
 
 ## Testing
 
-Run all tests:
+Run the tests:
 
 ```bash
-go test ./...
+go test ./internal/... ./processor/...
 ```
 
-Run with verbose output:
+The lexer and translator also have fuzz tests. A plain `go test` runs them over their seed inputs and the `samples/` files; to fuzz for real after changing the lexer or parser:
 
 ```bash
-go test ./... -v
+go test ./internal/bython/ -run '^$' -fuzz FuzzTranslate -fuzztime 30s -parallel 4
 ```
