@@ -4,20 +4,26 @@ A Go-based preprocessor that converts brace-style Python syntax to standard Pyth
 
 ## Overview
 
-Inspired by [Bython](https://github.com/mathialo/bython), go-Bython allows you to write Python code using braces `{}` instead of indentation, similar to languages like C, Java, or JavaScript. The preprocessor converts your brace-style code to standard Python with proper indentation.
+I hate Python, it's shit. and it's ugly. I found [Bython](https://github.com/mathialo/bython) and found it funny, but it had issues:
+1. It was written in Python
+2. It doesn't support all types of Python syntax, such as list comprehensions and generator expressions (or some shit)
 
-Source is processed by a real lexer and parser, not line-by-line pattern matching, so a `{` is classified by its grammatical position (block, dict, set or comprehension) and malformed input is reported with a precise `line:column` error instead of producing broken output.
+So, I thought I would make it in go instead. 
+
+go-Bython allows you to write Python code using braces `{}` instead of indentation, similar to languages like C, Java, or JavaScript. The preprocessor converts your brace-style code to standard Python with proper indentation.
+
+Source is processed by a real lexer and parser, so a `{` is classified by its grammatical position (block, dict, set, or comprehension) and malformed input is reported with a precise `line:column` error instead of producing broken output.
 
 ## Features
 
 - **Real lexer and parser** - Full Python tokenisation, including all string forms and nested f-strings (PEP 701)
-- **Precise errors** - Unbalanced braces, unterminated strings, stray clauses and similar mistakes fail with `file:line:column: message`, and no output file is written
-- **Streaming** - Input is read, translated and written one top-level statement at a time, so memory stays bounded by the largest top-level statement (one class or function), not by the file size
+- **Precise errors** - Unbalanced braces, unterminated strings, stray clauses, and similar mistakes fail with `file:line:column: message`, and no output file is written
+- **Streaming** - Input is read, translated, and written one top-level statement at a time, so memory stays bounded by the largest top-level statement (one class or function), not by the file size
 - **Fast concurrent processing** - Process multiple files in parallel using goroutines
 - **Batch processing** - Convert entire directories recursively
 - **Pattern matching** - Filter files by custom patterns (e.g., `*.py`, `*.pybrace`)
 - **Configurable indentation** - Choose your preferred indent size
-- **Source fidelity** - Expressions, comments and string literals (including multi-line strings) are copied exactly; only block structure and trailing semicolons change
+- **Source fidelity** - Expressions, comments, and string literals (including multi-line strings) are copied exactly; only block structure and trailing semicolons change
 
 ## Installation
 
@@ -137,7 +143,7 @@ if __name__ == "__main__":
 - Exception handling: `try`, `except`, `except*`, `else`, `finally`
 - Context managers: `with`, `async with`, parenthesised `with` items
 - Pattern matching: `match` / `case` (and `match` still works as an ordinary name)
-- Dictionaries, sets and comprehensions, including multi-line and inside block headers (`if x == {} {`)
+- Dictionaries, sets, and comprehensions, including multi-line and inside block headers (`if x == {} {`)
 - One-line blocks: `if x { return 1 }`, nested `if a { if b { c() } }`
 - Empty blocks: `def f() {}` becomes `def f():` with `pass`
 - Brace on its own line (Allman style)
@@ -145,7 +151,7 @@ if __name__ == "__main__":
 - Comments, including after braces (`} # note`)
 - All string forms: raw, bytes, triple-quoted, f-strings and t-strings, with braces inside them left untouched
 - `\` line continuations and multi-line bracketed expressions
-- CRLF line endings, tabs and a UTF-8 byte-order mark
+- CRLF line endings, tabs, and a UTF-8 byte-order mark
 
 ## Caveats
 
@@ -192,7 +198,7 @@ Tested on AMD Ryzen 9 9950X3D (16-Core Processor).
 | String with braces         | 1.48 μs  | 288 B     | 2         |
 | Parallel processing        | 177 ns   | 272 B     | 2         |
 
-Memory/op counts new allocations per call, not peak memory. Lexer, parser, AST storage and the output buffer are pooled and reused between calls, so steady-state translation makes only a couple of allocations regardless of file size.
+Memory/op counts new allocations per call, not peak memory. Lexer, parser, AST storage, and the output buffer are pooled and reused between calls, so steady-state translation makes only a couple of allocations regardless of file size.
 
 ### Whole files
 
