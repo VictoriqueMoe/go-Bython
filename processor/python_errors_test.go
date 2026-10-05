@@ -102,7 +102,7 @@ func TestProcessFileSyntaxErrorCreatesNoOutput(t *testing.T) {
 	p := NewPythonPreprocessor(2)
 
 	//when
-	err := p.ProcessFile(inputPath, outputPath)
+	_, err := p.ProcessFile(inputPath, outputPath)
 
 	//then
 	require.Error(t, err)

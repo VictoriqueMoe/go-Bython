@@ -120,7 +120,7 @@ func checkIndentation(t *testing.T, src, out string, size int) {
 		}
 
 		if atLineStart && tok.Kind != token.KindNewline {
-			lead := s.Text[tok.LineStart:tok.Start]
+			lead := s.Text[s.LineOf(tok).Start:tok.Start]
 			for _, c := range []byte(lead) {
 				if c != ' ' {
 					t.Fatalf("line %d starts with %q\ninput: %q\noutput: %q", tok.Line, lead, src, out)

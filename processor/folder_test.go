@@ -57,10 +57,12 @@ func TestFolderProcessor(t *testing.T) {
 	}
 
 	//when
-	err := fp.ProcessFolder(inputDir, outputDir)
+	summary, err := fp.ProcessFolder(inputDir, outputDir)
 
 	//then
 	assert.NoError(t, err)
+	assert.Equal(t, 3, summary.Files)
+	assert.Positive(t, summary.Timings.Total)
 
 	for path, expected := range expectedFiles {
 		fullPath := filepath.Join(outputDir, path)
@@ -95,7 +97,7 @@ func TestFolderProcessorWithPattern(t *testing.T) {
 	fp := NewFolderProcessor(4, "*.pybrace", 2)
 
 	//when
-	err := fp.ProcessFolder(inputDir, outputDir)
+	_, err := fp.ProcessFolder(inputDir, outputDir)
 
 	//then
 	assert.NoError(t, err)
@@ -125,7 +127,7 @@ func TestFolderProcessorSyntaxErrorPath(t *testing.T) {
 	fp := NewFolderProcessor(2, "*.py", 2)
 
 	//when
-	err := fp.ProcessFolder(inputDir, outputDir)
+	_, err := fp.ProcessFolder(inputDir, outputDir)
 
 	//then
 	assert.Error(t, err)

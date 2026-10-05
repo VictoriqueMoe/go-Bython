@@ -257,14 +257,14 @@ func TestLexIndentAndLines(t *testing.T) {
 	//then
 	require.NoError(t, err)
 	b := s.Tokens[2]
-	assert.Equal(t, 2, b.Line)
-	assert.Equal(t, 3, b.Indent)
+	assert.Equal(t, int32(2), b.Line)
+	assert.Equal(t, int32(3), s.LineOf(b).Indent)
 	str := s.Tokens[4]
 	assert.Equal(t, token.KindString, str.Kind)
-	assert.Equal(t, 3, str.Line)
+	assert.Equal(t, int32(3), str.Line)
 	assert.NotZero(t, str.Flags&token.FlagMultiline)
 	c := s.Tokens[5]
-	assert.Equal(t, 4, c.Line)
+	assert.Equal(t, int32(4), c.Line)
 }
 
 func TestLexFStrings(t *testing.T) {

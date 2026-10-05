@@ -47,6 +47,9 @@ func (l *lexer) scanFStringBody(tok token.Token, q byte, triple, raw bool) *diag
 				l.pos += 2
 				continue
 			}
+			if l.pos+1 >= len(text) {
+				l.starved = true
+			}
 			return diagnostic.At(l.src, diagnostic.ErrFStringSingleBrace, l.token(token.KindRBrace, l.pos, l.pos+1), msgFStringSingleBrace)
 		case '\\':
 			l.skipFStringEscape(raw)
@@ -54,6 +57,8 @@ func (l *lexer) scanFStringBody(tok token.Token, q byte, triple, raw bool) *diag
 			l.pos++
 		}
 	}
+
+	l.starved = true
 
 	return l.unterminated(tok, triple)
 }
@@ -77,6 +82,9 @@ func (l *lexer) skipFStringEscape(raw bool) {
 		if end >= 0 && text[next+2+end] == '}' {
 			l.pos = next + 2 + end + 1
 			return
+		}
+		if end < 0 {
+			l.starved = true
 		}
 	}
 
@@ -105,6 +113,7 @@ func (l *lexer) scanFieldContents(open token.Token, depth int, q byte, triple bo
 	for {
 		l.skipSpace()
 		if l.pos >= len(text) {
+			l.starved = true
 			return diagnostic.At(l.src, diagnostic.ErrFStringExpectingBrace, open, msgFStringExpectingBrace)
 		}
 
@@ -156,6 +165,7 @@ func (l *lexer) scanConversion(open token.Token, depth int, q byte, triple bool)
 	conv := l.pos + 1
 
 	if conv >= len(text) {
+		l.starved = true
 		return diagnostic.At(l.src, diagnostic.ErrFStringExpectingBrace, open, msgFStringExpectingBrace)
 	}
 
@@ -173,6 +183,10 @@ func (l *lexer) scanConversion(open token.Token, depth int, q byte, triple bool)
 	if l.pos < len(text) && text[l.pos] == ':' {
 		l.pos++
 		return l.scanFormatSpec(open, depth, q, triple)
+	}
+
+	if l.pos >= len(text) {
+		l.starved = true
 	}
 
 	return diagnostic.At(l.src, diagnostic.ErrFStringExpectingBrace, open, msgFStringExpectingBrace)
@@ -208,6 +222,8 @@ func (l *lexer) scanFormatSpec(open token.Token, depth int, q byte, triple bool)
 			l.pos++
 		}
 	}
+
+	l.starved = true
 
 	return diagnostic.At(l.src, diagnostic.ErrFStringExpectingBrace, open, msgFStringExpectingBrace)
 }

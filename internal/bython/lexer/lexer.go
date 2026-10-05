@@ -1,7 +1,11 @@
 package lexer
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+	"io"
+	"math"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -12,20 +16,39 @@ import (
 
 type (
 	lexer struct {
-		src          *token.Source
-		text         string
-		pos          int
-		line         int
-		lineStart    int
-		indent       int
-		lineHasToken bool
-		fdepth       int
+		src           *token.Source
+		text          string
+		pos           int
+		line          int
+		lineStart     int
+		lineHasToken  bool
+		fdepth        int
+		starved       bool
+		pendingIndent bool
+		r             io.Reader
+		block         []byte
+		exhausted     bool
+		bomChecked    bool
+		lastNL        int
+		total         int64
+	}
+
+	snapshot struct {
+		pos           int
+		line          int
+		lineStart     int
+		lines         int
+		lineHasToken  bool
+		pendingIndent bool
 	}
 )
 
 const (
 	byteOrderMark   = "\xef\xbb\xbf"
 	maxFStringDepth = 150
+	minBlock        = 64 << 10
+	maxPooledBlock  = 1 << 20
+	maxEmptyReads   = 100
 )
 
 const (
@@ -42,48 +65,183 @@ const (
 	msgContinuationAtEOF     = "unexpected end of file after line continuation character"
 )
 
+var (
+	ErrInputTooLarge = fmt.Errorf("input exceeds %d bytes", math.MaxInt32)
+)
+
 func Lex(src string) (*token.Source, error) {
 	s := &token.Source{}
-	if err := LexInto(s, src); err != nil {
+
+	var st Stream
+	if err := st.ResetString(s, src); err != nil {
+		return nil, err
+	}
+	st.whole = true
+
+	if _, err := st.Next(); err != nil {
 		return nil, err
 	}
 
 	return s, nil
 }
 
-func LexInto(s *token.Source, src string) error {
-	text := strings.TrimPrefix(src, byteOrderMark)
-	s.Text = text
-
-	if want := len(text)/3 + 4; cap(s.Tokens) < want {
-		s.Tokens = make([]token.Token, 0, want)
-	} else {
-		s.Tokens = s.Tokens[:0]
+func (l *lexer) start(s *token.Source, r io.Reader, text string) {
+	block := l.block
+	if cap(block) > maxPooledBlock {
+		block = nil
 	}
 
-	l := lexer{src: s, text: text, line: 1}
-	l.indent = l.lineIndent(0)
+	*l = lexer{
+		src:        s,
+		text:       text,
+		line:       1,
+		r:          r,
+		block:      block,
+		exhausted:  r == nil,
+		bomChecked: r == nil,
+		lastNL:     strings.LastIndexByte(text, '\n'),
+	}
 
-	for {
-		s.Tokens = append(s.Tokens, token.Token{})
-		last := len(s.Tokens) - 1
-		tok := &s.Tokens[last]
+	s.Text = text
+	s.Tokens = s.Tokens[:0]
+	s.FirstLine = 1
+	s.Lines = append(s.Lines[:0], token.LineInfo{Indent: l.measureIndent(0)})
+}
 
+func (l *lexer) next(tok *token.Token) error {
+	if l.exhausted && !l.pendingIndent {
 		if err := l.scanToken(tok); err != nil {
 			return err
 		}
+		return nil
+	}
 
-		if tok.Kind == token.KindEOF {
-			eof := *tok
-			s.Tokens = s.Tokens[:last]
-			l.finish(eof)
+	for {
+		if err := l.ensureLine(); err != nil {
+			return err
+		}
+
+		snap := l.save()
+		l.starved = false
+		err := l.scanToken(tok)
+
+		if l.exhausted || !l.starved {
+			if err != nil {
+				return err
+			}
 			return nil
 		}
 
-		if tok.Kind != token.KindNewline {
-			l.lineHasToken = true
+		l.restore(snap)
+
+		if err := l.refill(); err != nil {
+			return err
 		}
 	}
+}
+
+func (l *lexer) save() snapshot {
+	return snapshot{
+		pos:           l.pos,
+		line:          l.line,
+		lineStart:     l.lineStart,
+		lines:         len(l.src.Lines),
+		lineHasToken:  l.lineHasToken,
+		pendingIndent: l.pendingIndent,
+	}
+}
+
+func (l *lexer) restore(snap snapshot) {
+	l.pos = snap.pos
+	l.line = snap.line
+	l.lineStart = snap.lineStart
+	l.src.Lines = l.src.Lines[:snap.lines]
+	l.lineHasToken = snap.lineHasToken
+	l.pendingIndent = snap.pendingIndent
+	l.fdepth = 0
+}
+
+func (l *lexer) ensureLine() error {
+	for l.pos > l.lastNL && !l.exhausted {
+		if err := l.refill(); err != nil {
+			return err
+		}
+	}
+
+	if l.pendingIndent {
+		l.src.Lines[len(l.src.Lines)-1].Indent = l.measureIndent(l.lineStart)
+	}
+
+	return nil
+}
+
+func (l *lexer) refill() error {
+	want := max(minBlock, len(l.text))
+	if cap(l.block) < want {
+		l.block = make([]byte, want)
+	}
+
+	n, err := l.fill(l.block[:want])
+	if err != nil {
+		return fmt.Errorf("error reading input: %w", err)
+	}
+
+	l.total += int64(n)
+	if l.total > math.MaxInt32 {
+		return ErrInputTooLarge
+	}
+
+	data := l.block[:n]
+	if !l.bomChecked && (len(data) >= len(byteOrderMark) || l.exhausted) {
+		l.bomChecked = true
+		if len(data) >= len(byteOrderMark) && string(data[:len(byteOrderMark)]) == byteOrderMark {
+			data = data[len(byteOrderMark):]
+		}
+	}
+
+	if len(data) == 0 {
+		return nil
+	}
+
+	if idx := bytes.LastIndexByte(data, '\n'); idx >= 0 {
+		l.lastNL = len(l.text) + idx
+	}
+
+	l.text += string(data)
+	l.src.Text = l.text
+
+	return nil
+}
+
+func (l *lexer) fill(buf []byte) (int, error) {
+	n := 0
+	empty := 0
+
+	for n < len(buf) {
+		m, err := l.r.Read(buf[n:])
+		n += m
+
+		if errors.Is(err, io.EOF) {
+			l.exhausted = true
+			return n, nil
+		}
+
+		if err != nil {
+			return n, err
+		}
+
+		if m > 0 {
+			empty = 0
+			continue
+		}
+
+		empty++
+		if empty >= maxEmptyReads {
+			return n, io.ErrNoProgress
+		}
+	}
+
+	return n, nil
 }
 
 func (l *lexer) finish(eof token.Token) {
@@ -102,16 +260,14 @@ func (l *lexer) finish(eof token.Token) {
 
 func (l *lexer) token(kind token.Kind, start, end int) token.Token {
 	return token.Token{
-		Kind:      kind,
-		Start:     start,
-		End:       end,
-		Line:      l.line,
-		LineStart: l.lineStart,
-		Indent:    l.indent,
+		Kind:  kind,
+		Start: int32(start),
+		End:   int32(end),
+		Line:  int32(l.line),
 	}
 }
 
-func (l *lexer) lineIndent(at int) int {
+func (l *lexer) measureIndent(at int) int32 {
 	width := 0
 	for at+width < len(l.text) {
 		c := l.text[at+width]
@@ -121,13 +277,15 @@ func (l *lexer) lineIndent(at int) int {
 		width++
 	}
 
-	return width
+	l.pendingIndent = at+width == len(l.text) && !l.exhausted
+
+	return int32(width)
 }
 
 func (l *lexer) advanceLine(at int) {
 	l.line++
 	l.lineStart = at
-	l.indent = l.lineIndent(at)
+	l.src.Lines = append(l.src.Lines, token.LineInfo{Start: int32(at), Indent: l.measureIndent(at)})
 }
 
 func (l *lexer) skipSpace() {
@@ -158,6 +316,7 @@ func (l *lexer) scanToken(tok *token.Token) *diagnostic.SyntaxError {
 	text := l.text
 	start := l.pos
 	if start >= len(text) {
+		l.starved = true
 		*tok = l.token(token.KindEOF, start, start)
 		return nil
 	}
@@ -223,6 +382,7 @@ func (l *lexer) lineJoin(tok *token.Token, start int) *diagnostic.SyntaxError {
 	case l.isCRLF(next):
 		end = next + 2
 	case next >= len(text) || (text[next] == '\r' && next+1 >= len(text)):
+		l.starved = true
 		return diagnostic.At(l.src, diagnostic.ErrContinuationAtEOF, l.token(token.KindLineJoin, start, start), msgContinuationAtEOF)
 	default:
 		return diagnostic.At(l.src, diagnostic.ErrBadContinuation, l.token(token.KindLineJoin, start, start), msgBadContinuation)
@@ -252,6 +412,9 @@ func (l *lexer) scanName(tok *token.Token, start int) *diagnostic.SyntaxError {
 
 		r, size := utf8.DecodeRuneInString(text[pos:])
 		if r == utf8.RuneError && size == 1 {
+			if !utf8.FullRuneInString(text[pos:]) {
+				l.starved = true
+			}
 			if pos == start {
 				return diagnostic.At(l.src, diagnostic.ErrInvalidUTF8, l.token(token.KindName, pos, pos), fmt.Sprintf(msgInvalidUTF8, c))
 			}
@@ -331,6 +494,10 @@ func (l *lexer) scanOperator(tok *token.Token, start int) *diagnostic.SyntaxErro
 
 	kind, size := token.LookupOperator(rest)
 	if size == 0 {
+		if len(rest) == 1 {
+			l.starved = true
+		}
+
 		r, _ := utf8.DecodeRuneInString(rest)
 		return diagnostic.At(l.src, diagnostic.ErrInvalidCharacter, l.token(token.KindOperator, start, start), fmt.Sprintf(msgInvalidCharacter, r, r))
 	}
@@ -375,8 +542,8 @@ func (l *lexer) scanString(tok *token.Token, start, quote int) *diagnostic.Synta
 		return err
 	}
 
-	tok.End = l.pos
-	if strings.IndexByte(text[start:tok.End], '\n') >= 0 {
+	tok.End = int32(l.pos)
+	if strings.IndexByte(text[start:l.pos], '\n') >= 0 {
 		tok.Flags |= token.FlagMultiline
 	}
 
@@ -411,6 +578,8 @@ func (l *lexer) scanPlainBody(tok token.Token, q byte, triple bool) *diagnostic.
 			l.pos++
 		}
 	}
+
+	l.starved = true
 
 	return l.unterminated(tok, triple)
 }

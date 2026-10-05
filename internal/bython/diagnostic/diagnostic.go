@@ -69,7 +69,7 @@ func (e *SyntaxError) Error() string {
 func At(src *token.Source, code ErrorCode, tok token.Token, msg string) *SyntaxError {
 	return &SyntaxError{
 		Code: code,
-		Line: tok.Line,
+		Line: int(tok.Line),
 		Col:  Column(src, tok),
 		Msg:  msg,
 	}
@@ -77,26 +77,31 @@ func At(src *token.Source, code ErrorCode, tok token.Token, msg string) *SyntaxE
 
 func After(src *token.Source, code ErrorCode, tok token.Token, msg string) *SyntaxError {
 	body := src.Text[tok.Start:tok.End]
-	if last := strings.LastIndexByte(body, '\n'); last >= 0 {
-		tok.Line += strings.Count(body, "\n")
-		tok.LineStart = tok.Start + last + 1
+
+	last := strings.LastIndexByte(body, '\n')
+	if last < 0 {
+		tok.Start = tok.End
+		return At(src, code, tok, msg)
 	}
 
-	tok.Start = tok.End
-
-	return At(src, code, tok, msg)
+	return &SyntaxError{
+		Code: code,
+		Line: int(tok.Line) + strings.Count(body, "\n"),
+		Col:  utf8.RuneCountInString(body[last+1:]) + 1,
+		Msg:  msg,
+	}
 }
 
 func Related(src *token.Source, code ErrorCode, tok, related token.Token, msg string) *SyntaxError {
 	err := At(src, code, tok, msg)
-	err.RelLine = related.Line
+	err.RelLine = int(related.Line)
 	err.RelCol = Column(src, related)
 
 	return err
 }
 
 func Column(src *token.Source, tok token.Token) int {
-	prefix := src.Text[tok.LineStart:tok.Start]
+	prefix := src.Text[src.LineOf(tok).Start:tok.Start]
 
 	return utf8.RuneCountInString(prefix) + 1
 }

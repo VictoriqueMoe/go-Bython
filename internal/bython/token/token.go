@@ -8,19 +8,24 @@ type (
 	Flags   uint8
 
 	Token struct {
-		Kind      Kind
-		Kw        Keyword
-		Flags     Flags
-		Start     int
-		End       int
-		Line      int
-		LineStart int
-		Indent    int
+		Kind  Kind
+		Kw    Keyword
+		Flags Flags
+		Start int32
+		End   int32
+		Line  int32
+	}
+
+	LineInfo struct {
+		Start  int32
+		Indent int32
 	}
 
 	Source struct {
-		Text   string
-		Tokens []Token
+		Text      string
+		Tokens    []Token
+		Lines     []LineInfo
+		FirstLine int32
 	}
 )
 
@@ -193,6 +198,10 @@ var (
 		'=': KindOperator,
 	}
 )
+
+func (s *Source) LineOf(tok Token) LineInfo {
+	return s.Lines[tok.Line-s.FirstLine]
+}
 
 func (k Keyword) String() string {
 	return keywordNames[k]

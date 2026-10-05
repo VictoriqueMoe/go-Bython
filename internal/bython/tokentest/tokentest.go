@@ -2,10 +2,25 @@ package tokentest
 
 import (
 	"fmt"
+	"io"
 	"strings"
 
 	"go-Bython/internal/bython/token"
 )
+
+type (
+	OneByteReader struct {
+		R io.Reader
+	}
+)
+
+func (o *OneByteReader) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+
+	return o.R.Read(p[:1])
+}
 
 func RoundTrip(s *token.Source) error {
 	var b strings.Builder
@@ -13,20 +28,21 @@ func RoundTrip(s *token.Source) error {
 	prev := 0
 
 	for i, tok := range s.Tokens {
-		if tok.Start < prev || tok.End < tok.Start || tok.End > textLen {
-			return fmt.Errorf("token %d [%d,%d) overlaps or is out of order (prev end %d)", i, tok.Start, tok.End, prev)
+		start, end := int(tok.Start), int(tok.End)
+		if start < prev || end < start || end > textLen {
+			return fmt.Errorf("token %d [%d,%d) overlaps or is out of order (prev end %d)", i, start, end, prev)
 		}
 
-		if err := checkGap(s.Text, prev, tok.Start); err != nil {
+		if err := checkGap(s.Text, prev, start); err != nil {
 			return err
 		}
 
-		b.WriteString(s.Text[prev:tok.Start])
-		b.WriteString(s.Text[tok.Start:tok.End])
-		prev = tok.End
+		b.WriteString(s.Text[prev:start])
+		b.WriteString(s.Text[start:end])
+		prev = end
 	}
 
-	if last := s.Tokens[len(s.Tokens)-1]; last.Kind != token.KindEOF || last.Start != textLen {
+	if last := s.Tokens[len(s.Tokens)-1]; last.Kind != token.KindEOF || int(last.Start) != textLen {
 		return fmt.Errorf("last token is %v at %d, want EOF at %d", last.Kind, last.Start, len(s.Text))
 	}
 

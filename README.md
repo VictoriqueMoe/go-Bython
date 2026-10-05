@@ -12,6 +12,7 @@ Source is processed by a real lexer and parser, not line-by-line pattern matchin
 
 - **Real lexer and parser** - Full Python tokenisation, including all string forms and nested f-strings (PEP 701)
 - **Precise errors** - Unbalanced braces, unterminated strings, stray clauses and similar mistakes fail with `file:line:column: message`, and no output file is written
+- **Streaming** - Input is read, translated and written one top-level statement at a time, so memory stays bounded by the largest top-level statement (one class or function), not by the file size
 - **Fast concurrent processing** - Process multiple files in parallel using goroutines
 - **Batch processing** - Convert entire directories recursively
 - **Pattern matching** - Filter files by custom patterns (e.g., `*.py`, `*.pybrace`)
@@ -162,42 +163,48 @@ The same applies to files already written in standard Python and to files that m
 
 Statements and block structure are fully parsed, but expressions are only checked for balanced brackets and obvious mistakes such as two values with no operator between them. Anything subtler (for example an invalid number like `1__2`) passes through and is reported by Python when the output runs.
 
-## Architecture
+## Streaming and Error Behaviour
 
-```
-go-Bython/
-├── main.go                    # CLI entry point
-├── internal/bython/
-│   ├── translate.go           # Translate: lex, parse, emit
-│   ├── token/                 # Token kinds, keywords, source positions
-│   ├── diagnostic/            # Syntax errors with line:column
-│   ├── lexer/                 # Tokeniser, including f-string scanning
-│   ├── ast/                   # Statement and block AST
-│   ├── parser/                # Recursive-descent parser and brace classification
-│   └── emitter/               # Writes indented Python from the AST
-├── processor/
-│   ├── processor.go           # Processor interface
-│   ├── python.go              # Adapter over internal/bython
-│   └── folder.go              # Folder/batch processing
-└── README.md
-```
+Input is read in 64 KiB blocks and translated one top-level statement at a time, so memory depends on the largest statement, not the file size. A statement stays open while the next code line could still belong to it (`elif`, `else`, `except`, `finally`, an Allman `{`, or the target of a decorator). Comment and blank lines after a closing `}` are held until the next code line.
+
+On error:
+
+- `ProcessFile` writes nothing. Output goes to a temp file that is renamed into place only on success, so an existing output file is left untouched. Translating a file in place works.
+- `ProcessReader` may already have written earlier statements, in 64 KiB blocks.
+- `ProcessString` returns an empty string.
+
+Errors are reported in reading order, so the first mistake in the file wins. Inputs of 2 GiB or more are rejected.
 
 ## Performance
 
-Tested on AMD Ryzen 9 9950X3D (16-Core Processor):
+Tested on AMD Ryzen 9 9950X3D (16-Core Processor).
+
+### In-memory translation
 
 | Benchmark                  | Time/op  | Memory/op | Allocs/op |
 |----------------------------|----------|-----------|-----------|
-| Simple if/else             | 652 ns   | 352 B     | 2         |
-| Nested blocks (5 levels)   | 1.04 μs  | 480 B     | 2         |
-| Class with methods         | 3.18 μs  | 961 B     | 2         |
-| Complex program            | 6.66 μs  | 1.67 KB   | 2         |
-| Large file (100 functions) | 80.6 μs  | 22.7 KB   | 6         |
-| Process reader             | 852 ns   | 1.08 KB   | 7         |
-| String with braces         | 1.37 μs  | 512 B     | 2         |
-| Parallel processing        | 238 ns   | 496 B     | 2         |
+| Simple if/else             | 720 ns   | 128 B     | 2         |
+| Nested blocks (5 levels)   | 1.18 μs  | 256 B     | 2         |
+| Class with methods         | 3.35 μs  | 737 B     | 2         |
+| Complex program            | 7.06 μs  | 1.44 KB   | 2         |
+| Large file (100 functions) | 83.6 μs  | 13.6 KB   | 2         |
+| Process reader             | 795 ns   | 210 B     | 4         |
+| String with braces         | 1.48 μs  | 288 B     | 2         |
+| Parallel processing        | 177 ns   | 272 B     | 2         |
 
-Lexer, parser and AST storage are pooled and reused between calls, so steady-state translation makes only a couple of allocations regardless of file size.
+Memory/op counts new allocations per call, not peak memory. Lexer, parser, AST storage and the output buffer are pooled and reused between calls, so steady-state translation makes only a couple of allocations regardless of file size.
+
+### Whole files
+
+Single-file mode on generated inputs (the `samples/` files concatenated), compared with the previous line-by-line processor. Peak heap is the largest heap size reported by `GODEBUG=gctrace=1`; the time is the tool's own reported processing time.
+
+| Input | Previous: peak heap | Previous: time | Current: peak heap | Current: time |
+|-------|---------------------|----------------|--------------------|---------------|
+| 1 MB  | under 4 MB          | 122 ms         | under 4 MB         | 10 ms         |
+| 10 MB | 3 MB                | 1200 ms        | 3 MB               | 135 ms        |
+| 50 MB | 3 MB                | 6141 ms        | 3 MB               | 458 ms        |
+
+Memory stays flat because only one top-level statement is held at a time (see [Streaming and Error Behaviour](#streaming-and-error-behaviour)). Most of the whole-file speed-up comes from buffered output: the previous processor issued one unbuffered write per output line, while the current one writes through a 64 KiB buffer.
 
 Run benchmarks yourself:
 

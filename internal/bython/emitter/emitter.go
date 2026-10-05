@@ -1,6 +1,7 @@
 package emitter
 
 import (
+	"bufio"
 	"strings"
 
 	"go-Bython/internal/bython/ast"
@@ -8,13 +9,19 @@ import (
 )
 
 type (
+	Emitter struct {
+		e emitter
+	}
+
 	emitter struct {
+		src    *token.Source
 		text   string
 		toks   []token.Token
 		unit   int
 		spaces string
-		out    strings.Builder
+		out    *bufio.Writer
 		buf    []byte
+		err    error
 	}
 )
 
@@ -27,24 +34,37 @@ var (
 	spacePool = strings.Repeat(" ", 256)
 )
 
-func Emit(m *ast.Module, indentSize int) string {
+func (em *Emitter) Emit(out *bufio.Writer, m *ast.Module, indentSize int) error {
 	if indentSize < 1 {
 		indentSize = defaultIndentSize
 	}
 
-	text := m.Source.Text
-	e := emitter{
-		text:   text,
-		toks:   m.Source.Tokens,
-		unit:   indentSize,
-		spaces: spacePool,
-		buf:    make([]byte, 0, lineBufferSize),
+	e := &em.e
+	e.src = m.Source
+	e.text = m.Source.Text
+	e.toks = m.Source.Tokens
+	e.unit = indentSize
+	e.out = out
+	e.err = nil
+
+	if e.spaces == "" {
+		e.spaces = spacePool
 	}
-	e.out.Grow(len(text) + len(text)/4)
+
+	if e.buf == nil {
+		e.buf = make([]byte, 0, lineBufferSize)
+	}
+	e.buf = e.buf[:0]
 
 	e.stmts(m.Body, 0)
 
-	return e.out.String()
+	err := e.err
+	e.src = nil
+	e.text = ""
+	e.toks = nil
+	e.out = nil
+
+	return err
 }
 
 func (e *emitter) indent(level int) {
@@ -62,8 +82,10 @@ func (e *emitter) flush() {
 		end--
 	}
 
-	e.out.Write(e.buf[:end])
-	e.out.WriteByte('\n')
+	e.buf = append(e.buf[:end], '\n')
+	if _, err := e.out.Write(e.buf); err != nil && e.err == nil {
+		e.err = err
+	}
 	e.buf = e.buf[:0]
 }
 
@@ -86,7 +108,7 @@ func (e *emitter) stmts(body []ast.Stmt, level int) {
 
 func (e *emitter) simpleLine(sl *ast.SimpleLine, level int) {
 	e.indent(level)
-	base := e.toks[sl.Stmts[0].Expr.Span.First].Indent
+	base := int(e.src.LineOf(e.toks[sl.Stmts[0].Expr.Span.First]).Indent)
 
 	for i, st := range sl.Stmts {
 		if i > 0 {
@@ -106,7 +128,7 @@ func (e *emitter) compound(cs *ast.CompoundStmt, level int) {
 	for _, d := range cs.Decorators {
 		e.stmts(d.Leading, level)
 		e.indent(level)
-		e.span(ast.Span{First: d.At, End: d.Expr.Span.End}, level, e.toks[d.At].Indent, -1)
+		e.span(ast.Span{First: d.At, End: d.Expr.Span.End}, level, int(e.src.LineOf(e.toks[d.At]).Indent), -1)
 		e.trailing(d.Trailing)
 		e.flush()
 	}
@@ -114,7 +136,7 @@ func (e *emitter) compound(cs *ast.CompoundStmt, level int) {
 	for _, c := range cs.Clauses {
 		e.stmts(c.Leading, level)
 		e.indent(level)
-		e.span(c.Header.Span, level, e.toks[c.Header.Span.First].Indent, -1)
+		e.span(c.Header.Span, level, int(e.src.LineOf(e.toks[c.Header.Span.First]).Indent), -1)
 		e.buf = append(e.buf, ':')
 		e.flush()
 
@@ -144,7 +166,7 @@ func (e *emitter) trailing(idx int) {
 	e.appendToken(comment)
 }
 
-func (e *emitter) span(sp ast.Span, level, base, prevEnd int) {
+func (e *emitter) span(sp ast.Span, level, base int, prevEnd int32) {
 	lineStart := false
 	afterComment := false
 
@@ -179,7 +201,7 @@ func (e *emitter) span(sp ast.Span, level, base, prevEnd int) {
 		}
 
 		if lineStart {
-			e.indent(level + rescale(tok.Indent-base, e.unit))
+			e.indent(level + rescale(int(e.src.LineOf(tok).Indent)-base, e.unit))
 			lineStart = false
 		} else if prevEnd >= 0 {
 			e.appendGap(prevEnd, tok.Start)
@@ -191,7 +213,7 @@ func (e *emitter) span(sp ast.Span, level, base, prevEnd int) {
 	}
 }
 
-func (e *emitter) appendGap(from, to int) {
+func (e *emitter) appendGap(from, to int32) {
 	switch to - from {
 	case 0:
 		return

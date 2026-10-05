@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"time"
 
 	"go-Bython/processor"
 )
@@ -29,13 +28,16 @@ func main() {
 			log.Fatal("output directory (-od) is required when using input directory (-d)")
 		}
 
-		start := time.Now()
 		fp := processor.NewFolderProcessor(*indentSize, *filePattern, *workers)
-		if err := fp.ProcessFolder(*inputDir, *outputDir); err != nil {
+		summary, err := fp.ProcessFolder(*inputDir, *outputDir)
+		if err != nil {
 			log.Fatal(err)
-			return
 		}
-		fmt.Printf("Successfully processed folder: %s -> %s in %v\n", *inputDir, *outputDir, time.Since(start))
+
+		fmt.Printf("Successfully processed folder: %s -> %s\n", *inputDir, *outputDir)
+		fmt.Printf("Summed across %d files:\n", summary.Files)
+		printSteps(summary.Timings.Steps())
+		fmt.Printf("  %-10s %v\n", "wall", summary.Wall)
 		return
 	}
 
@@ -44,12 +46,19 @@ func main() {
 		os.Exit(1)
 	}
 
-	start := time.Now()
-	if err := p.ProcessFile(*inputFile, *outputFile); err != nil {
+	timings, err := p.ProcessFile(*inputFile, *outputFile)
+	if err != nil {
 		log.Fatal(err)
 	}
 
-	fmt.Printf("Successfully processed: %s -> %s in %v\n", *inputFile, *outputFile, time.Since(start))
+	fmt.Printf("Successfully processed: %s -> %s\n", *inputFile, *outputFile)
+	printSteps(timings.Steps())
+}
+
+func printSteps(steps []processor.TimingStep) {
+	for _, step := range steps {
+		fmt.Printf("  %-10s %v\n", step.Name, step.Duration)
+	}
 }
 
 func init() {
