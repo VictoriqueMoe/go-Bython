@@ -3,6 +3,7 @@ package processor
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -56,10 +57,12 @@ func TestFolderProcessor(t *testing.T) {
 	}
 
 	//when
-	err := fp.ProcessFolder(inputDir, outputDir)
+	summary, err := fp.ProcessFolder(inputDir, outputDir)
 
 	//then
 	assert.NoError(t, err)
+	assert.Equal(t, 3, summary.Files)
+	assert.Positive(t, summary.Timings.Total)
 
 	for path, expected := range expectedFiles {
 		fullPath := filepath.Join(outputDir, path)
@@ -94,7 +97,7 @@ func TestFolderProcessorWithPattern(t *testing.T) {
 	fp := NewFolderProcessor(4, "*.pybrace", 2)
 
 	//when
-	err := fp.ProcessFolder(inputDir, outputDir)
+	_, err := fp.ProcessFolder(inputDir, outputDir)
 
 	//then
 	assert.NoError(t, err)
@@ -104,4 +107,30 @@ func TestFolderProcessorWithPattern(t *testing.T) {
 
 	ignoredFile := filepath.Join(outputDir, "ignore.py")
 	assert.NoFileExists(t, ignoredFile, "Expected ignore.py to NOT be created")
+}
+
+func TestFolderProcessorSyntaxErrorPath(t *testing.T) {
+	//given
+	tmpDir := t.TempDir()
+	inputDir := filepath.Join(tmpDir, "input")
+	outputDir := filepath.Join(tmpDir, "output")
+
+	if err := os.MkdirAll(inputDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	badPath := filepath.Join(inputDir, "bad.py")
+	if err := os.WriteFile(badPath, []byte("if x {\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	fp := NewFolderProcessor(2, "*.py", 2)
+
+	//when
+	_, err := fp.ProcessFolder(inputDir, outputDir)
+
+	//then
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), badPath+":1:6: '{' was never closed (opens the 'if' block)")
+	assert.Equal(t, 1, strings.Count(err.Error(), badPath))
 }

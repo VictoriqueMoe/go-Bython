@@ -1,11 +1,14 @@
 package processor
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"go-Bython/internal/bython/diagnostic"
 )
 
 type FolderProcessor struct {
@@ -28,21 +31,26 @@ func NewFolderProcessor(indentSize int, filePattern string, workers int) *Folder
 	}
 }
 
-func (f *FolderProcessor) ProcessFolder(inputDir, outputDir string) error {
+func (f *FolderProcessor) ProcessFolder(inputDir, outputDir string) (FolderSummary, error) {
+	wall := startStopwatch()
+
 	files, err := f.discoverFiles(inputDir)
 	if err != nil {
-		return err
+		return FolderSummary{}, err
 	}
 
 	if len(files) == 0 {
-		return fmt.Errorf("no files matching pattern '%s' found in %s", f.filePattern, inputDir)
+		return FolderSummary{}, fmt.Errorf("no files matching pattern '%s' found in %s", f.filePattern, inputDir)
 	}
 
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
-		return fmt.Errorf("failed to create output directory: %v", err)
+		return FolderSummary{}, fmt.Errorf("failed to create output directory: %v", err)
 	}
 
-	return f.processFilesConcurrently(inputDir, outputDir, files)
+	summary, err := f.processFilesConcurrently(inputDir, outputDir, files)
+	summary.Wall = wall.elapsed()
+
+	return summary, err
 }
 
 func (f *FolderProcessor) discoverFiles(rootDir string) ([]string, error) {
@@ -69,10 +77,11 @@ func (f *FolderProcessor) discoverFiles(rootDir string) ([]string, error) {
 	return files, err
 }
 
-func (f *FolderProcessor) processFilesConcurrently(inputDir, outputDir string, files []string) error {
+func (f *FolderProcessor) processFilesConcurrently(inputDir, outputDir string, files []string) (FolderSummary, error) {
 	type result struct {
-		file string
-		err  error
+		file    string
+		timings Timings
+		err     error
 	}
 
 	jobs := make(chan string, len(files))
@@ -81,14 +90,12 @@ func (f *FolderProcessor) processFilesConcurrently(inputDir, outputDir string, f
 	var wg sync.WaitGroup
 
 	for i := 0; i < f.workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			localProcessor := NewPythonPreprocessor(f.indentSize)
 			for file := range jobs {
 				relPath, err := filepath.Rel(inputDir, file)
 				if err != nil {
-					results <- result{file, err}
+					results <- result{file: file, err: err}
 					continue
 				}
 
@@ -96,20 +103,16 @@ func (f *FolderProcessor) processFilesConcurrently(inputDir, outputDir string, f
 				outputFileDir := filepath.Dir(outputPath)
 
 				if err := os.MkdirAll(outputFileDir, 0755); err != nil {
-					results <- result{file, fmt.Errorf("failed to create directory %s: %v", outputFileDir, err)}
+					results <- result{file: file, err: fmt.Errorf("failed to create directory %s: %v", outputFileDir, err)}
 					continue
 				}
 
 				outputPath = strings.TrimSuffix(outputPath, filepath.Ext(outputPath)) + ".py"
 
-				if err := localProcessor.ProcessFile(file, outputPath); err != nil {
-					results <- result{file, err}
-					continue
-				}
-
-				results <- result{file, nil}
+				timings, err := localProcessor.ProcessFile(file, outputPath)
+				results <- result{file: file, timings: timings, err: err}
 			}
-		}()
+		})
 	}
 
 	for _, file := range files {
@@ -122,20 +125,26 @@ func (f *FolderProcessor) processFilesConcurrently(inputDir, outputDir string, f
 		close(results)
 	}()
 
-	var errors []string
-	processed := 0
+	var failures []string
+	var summary FolderSummary
 
 	for res := range results {
-		if res.err != nil {
-			errors = append(errors, fmt.Sprintf("%s: %v", res.file, res.err))
+		if res.err == nil {
+			summary.Files++
+			summary.Timings.Add(res.timings)
+			continue
+		}
+
+		if _, ok := errors.AsType[*diagnostic.SyntaxError](res.err); ok {
+			failures = append(failures, res.err.Error())
 		} else {
-			processed++
+			failures = append(failures, fmt.Sprintf("%s: %v", res.file, res.err))
 		}
 	}
 
-	if len(errors) > 0 {
-		return fmt.Errorf("processed %d files with %d errors:\n%s", processed, len(errors), strings.Join(errors, "\n"))
+	if len(failures) > 0 {
+		return summary, fmt.Errorf("processed %d files with %d errors:\n%s", summary.Files, len(failures), strings.Join(failures, "\n"))
 	}
 
-	return nil
+	return summary, nil
 }

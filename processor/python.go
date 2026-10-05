@@ -1,338 +1,128 @@
 package processor
 
 import (
-	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"os"
-	"strings"
+	"path/filepath"
+
+	"go-Bython/internal/bython"
+	"go-Bython/internal/bython/diagnostic"
 )
 
-type PythonPreprocessor struct {
-	indentSize       int
-	indentChar       string
-	indentLevel      int
-	structuralBlocks int
-	dictDepth        int
-	dictBaseIndent   int
-}
+type (
+	PythonPreprocessor struct {
+		indentSize int
+	}
+)
+
+const (
+	defaultIndentSize = 4
+	outputFileMode    = 0o644
+	tempFilePattern   = ".*.tmp"
+)
 
 func NewPythonPreprocessor(indentSize int) Processor {
-	return &PythonPreprocessor{
-		indentSize:       indentSize,
-		indentChar:       strings.Repeat(" ", indentSize),
-		indentLevel:      0,
-		structuralBlocks: 0,
-		dictDepth:        0,
-	}
-}
-
-var controlKeywords = []string{
-	"if ", "elif ", "else", "while ", "for ", "def ", "class ", "try", "except", "finally", "with ",
-}
-
-func (p *PythonPreprocessor) processLine(line string) []string {
-	trimmed := strings.TrimSpace(line)
-	if trimmed == "" {
-		return []string{""}
+	if indentSize < 1 {
+		indentSize = defaultIndentSize
 	}
 
-	if strings.HasPrefix(trimmed, "#") {
-		return []string{p.indent() + trimmed}
-	}
-
-	if strings.HasPrefix(trimmed, "}") {
-		if p.dictDepth > 0 {
-			p.dictDepth--
-			leadingSpaces := len(line) - len(strings.TrimLeft(line, " \t"))
-			relativeIndent := leadingSpaces - p.dictBaseIndent
-			indentLevels := relativeIndent / p.indentSize
-			if relativeIndent > 0 && indentLevels == 0 {
-				indentLevels = 1
-			}
-			normalizedIndent := strings.Repeat(p.indentChar, indentLevels)
-			processedLine := normalizedIndent + strings.TrimSuffix(trimmed, ";")
-			if p.dictDepth == 0 {
-				p.dictBaseIndent = 0
-			}
-			return []string{processedLine}
-		}
-
-		if p.structuralBlocks > 0 {
-			p.indentLevel--
-			p.structuralBlocks--
-
-			remaining := strings.TrimSpace(trimmed[1:])
-
-			if strings.HasPrefix(remaining, "else") || strings.HasPrefix(remaining, "elif") {
-				return p.processLine(remaining)
-			} else if remaining != "" {
-				return p.processLine(remaining)
-			}
-			return []string{}
-		}
-
-		processedLine := strings.TrimSuffix(trimmed, ";")
-		return []string{p.indent() + processedLine}
-	}
-
-	if p.dictDepth > 0 {
-		leadingSpaces := len(line) - len(strings.TrimLeft(line, " \t"))
-		relativeIndent := leadingSpaces - p.dictBaseIndent
-		indentLevels := relativeIndent / p.indentSize
-		if relativeIndent > 0 && indentLevels == 0 {
-			indentLevels = 1
-		}
-		normalizedIndent := strings.Repeat(p.indentChar, indentLevels)
-		processedLine := normalizedIndent + strings.TrimSuffix(trimmed, ";")
-		openBraces := strings.Count(processedLine, "{")
-		closeBraces := strings.Count(processedLine, "}")
-		p.dictDepth += openBraces - closeBraces
-		return []string{processedLine}
-	}
-
-	dictBraceIndex := p.findDictionaryBrace(trimmed)
-	if dictBraceIndex != -1 {
-		p.dictBaseIndent = len(line) - len(strings.TrimLeft(line, " \t"))
-		p.dictDepth = 1
-		openBraces := strings.Count(trimmed, "{")
-		closeBraces := strings.Count(trimmed, "}")
-		p.dictDepth = openBraces - closeBraces
-		processedLine := p.indent() + strings.TrimSuffix(trimmed, ";")
-		return []string{processedLine}
-	}
-
-	needsColon := false
-	openBraceIndex := p.findStructuralBrace(trimmed)
-
-	if openBraceIndex != -1 {
-		beforeBrace := strings.TrimSpace(trimmed[:openBraceIndex])
-		afterBrace := strings.TrimSpace(trimmed[openBraceIndex+1:])
-
-		if !p.isControlStatement(beforeBrace) {
-			processedLine := strings.TrimSuffix(trimmed, ";")
-			return []string{p.indent() + processedLine}
-		}
-
-		if p.isControlStatement(beforeBrace) {
-			needsColon = true
-		}
-
-		processedLine := beforeBrace
-		if needsColon && !strings.HasSuffix(processedLine, ":") {
-			processedLine += ":"
-		}
-
-		result := []string{p.indent() + processedLine}
-
-		p.indentLevel++
-		p.structuralBlocks++
-
-		if afterBrace != "" && afterBrace != "}" {
-			if strings.HasSuffix(afterBrace, "}") {
-				content := strings.TrimSpace(afterBrace[:len(afterBrace)-1])
-				if content != "" {
-					content = strings.TrimSuffix(content, ";")
-					result = append(result, p.indent()+content)
-				}
-				p.indentLevel--
-				p.structuralBlocks--
-			} else {
-				afterBrace = strings.TrimSuffix(afterBrace, ";")
-				result = append(result, p.indent()+afterBrace)
-			}
-		}
-
-		return result
-	}
-
-	processedLine := trimmed
-	processedLine = strings.TrimSuffix(processedLine, ";")
-
-	return []string{p.indent() + processedLine}
-}
-
-func (p *PythonPreprocessor) isControlStatement(line string) bool {
-	for _, keyword := range controlKeywords {
-		if strings.HasPrefix(line, keyword) || line == strings.TrimSpace(keyword) {
-			return true
-		}
-	}
-
-	if strings.Contains(line, "__main__") {
-		return true
-	}
-
-	return false
-}
-
-func (p *PythonPreprocessor) indent() string {
-	return strings.Repeat(p.indentChar, p.indentLevel)
-}
-
-// stringParser holds the state for parsing strings and f-strings
-type stringParser struct {
-	inString   bool
-	stringChar rune
-	inFString  bool
-}
-
-// parseBraces finds braces while properly handling strings and f-strings
-func (p *PythonPreprocessor) parseBraces(line string, findStructural bool) int {
-	parser := stringParser{}
-	dictBraceIndex := -1
-	depth := 0
-
-	for i := 0; i < len(line); i++ {
-		ch := line[i]
-
-		// Detect f-string start
-		if i > 0 && (line[i-1] == 'f' || line[i-1] == 'F') && (ch == '"' || ch == '\'') {
-			parser.inFString = true
-		}
-
-		// Handle string quotes
-		if (ch == '"' || ch == '\'') && (i == 0 || line[i-1] != '\\') {
-			if !parser.inString {
-				parser.inString = true
-				parser.stringChar = rune(ch)
-			} else if rune(ch) == parser.stringChar {
-				parser.inString = false
-				parser.stringChar = 0
-				parser.inFString = false
-			}
-		}
-
-		if ch == '{' && parser.inFString {
-			depth := 1
-			for j := i + 1; j < len(line); j++ {
-				if line[j] == '{' {
-					depth++
-				} else if line[j] == '}' {
-					depth--
-					if depth == 0 {
-						i = j
-						break
-					}
-				}
-			}
-			continue
-		}
-
-		if ch == '{' && !parser.inString {
-			if findStructural {
-				if p.isDictionaryBrace(line, i) {
-					continue
-				}
-				return i
-			} else {
-				before := strings.TrimSpace(line[:i])
-				if strings.HasSuffix(before, ")") {
-					continue
-				}
-				if strings.HasSuffix(before, "=") || strings.HasSuffix(before, ":") ||
-					strings.HasSuffix(before, "(") || strings.HasSuffix(before, "[") ||
-					strings.HasSuffix(before, ",") || strings.HasSuffix(before, "return") {
-					if dictBraceIndex == -1 {
-						dictBraceIndex = i
-					}
-					depth++
-				}
-			}
-		}
-
-		if ch == '}' && !parser.inString && !findStructural && depth > 0 {
-			depth--
-			if depth == 0 {
-				dictBraceIndex = -1
-			}
-		}
-	}
-
-	if findStructural {
-		return -1
-	}
-
-	if depth > 0 {
-		return dictBraceIndex
-	}
-	return -1
-}
-
-func (p *PythonPreprocessor) findStructuralBrace(line string) int {
-	return p.parseBraces(line, true)
-}
-
-func (p *PythonPreprocessor) findDictionaryBrace(line string) int {
-	return p.parseBraces(line, false)
-}
-
-func (p *PythonPreprocessor) isDictionaryBrace(line string, braceIndex int) bool {
-	before := strings.TrimSpace(line[:braceIndex])
-
-	if strings.HasSuffix(before, ")") {
-		return false
-	}
-
-	if strings.HasSuffix(before, "=") || strings.HasSuffix(before, ":") || strings.HasSuffix(before, "(") || strings.HasSuffix(before, "[") || strings.HasSuffix(before, ",") || strings.HasSuffix(before, "return") {
-		return true
-	}
-
-	return false
-}
-
-func (p *PythonPreprocessor) ProcessReader(reader io.Reader, writer io.Writer) error {
-	scanner := bufio.NewScanner(reader)
-	first := true
-
-	for scanner.Scan() {
-		lines := p.processLine(scanner.Text())
-		for _, line := range lines {
-			if line != "" || !first {
-				_, err := fmt.Fprintln(writer, line)
-				if err != nil {
-					return err
-				}
-			}
-			first = false
-		}
-	}
-
-	return scanner.Err()
-}
-
-func (p *PythonPreprocessor) ProcessFile(inputPath, outputPath string) error {
-	p.indentLevel = 0
-	p.structuralBlocks = 0
-	p.dictDepth = 0
-
-	inputFile, err := os.Open(inputPath)
-	if err != nil {
-		return fmt.Errorf("error opening input file: %v", err)
-	}
-	defer func() { _ = inputFile.Close() }()
-
-	outputFile, err := os.Create(outputPath)
-	if err != nil {
-		return fmt.Errorf("error creating output file: %v", err)
-	}
-	defer func() { _ = outputFile.Close() }()
-
-	return p.ProcessReader(inputFile, outputFile)
+	return &PythonPreprocessor{indentSize: indentSize}
 }
 
 func (p *PythonPreprocessor) ProcessString(input string) (string, error) {
-	p.indentLevel = 0
-	p.structuralBlocks = 0
-	p.dictDepth = 0
-	reader := strings.NewReader(input)
-	var builder strings.Builder
-	builder.Grow(len(input) + len(input)/4)
-	err := p.ProcessReader(reader, &builder)
+	output, err := bython.Translate(input, p.indentSize)
 	if err != nil {
 		return "", err
 	}
-	return builder.String(), nil
+
+	return output, nil
+}
+
+func (p *PythonPreprocessor) ProcessReader(reader io.Reader, writer io.Writer) error {
+	return bython.TranslateStream(reader, writer, p.indentSize)
+}
+
+func (p *PythonPreprocessor) ProcessFile(inputPath, outputPath string) (Timings, error) {
+	var timings Timings
+	total := startStopwatch()
+
+	input, err := os.Open(inputPath)
+	if err != nil {
+		return timings, fmt.Errorf("error opening input file: %w", err)
+	}
+
+	output, err := os.CreateTemp(filepath.Dir(outputPath), filepath.Base(outputPath)+tempFilePattern)
+	if err != nil {
+		err = fmt.Errorf("error creating output file: %w", err)
+		if closeErr := input.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("error closing input file: %w", closeErr))
+		}
+		return timings, err
+	}
+	timings.Open = total.elapsed()
+
+	if err := p.writeOutput(input, output, inputPath, outputPath, &timings); err != nil {
+		if removeErr := os.Remove(output.Name()); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			return timings, errors.Join(err, fmt.Errorf("error removing temporary output file: %w", removeErr))
+		}
+		return timings, err
+	}
+
+	timings.Total = total.elapsed()
+
+	return timings, nil
+}
+
+func (p *PythonPreprocessor) writeOutput(input, output *os.File, inputPath, outputPath string, timings *Timings) error {
+	reader := timedReader{r: input}
+	writer := timedWriter{w: output}
+
+	translate := startStopwatch()
+	err := bython.TranslateStream(&reader, &writer, p.indentSize)
+	timings.Read = reader.elapsed
+	timings.Write = writer.elapsed
+	timings.Translate = translate.elapsed() - reader.elapsed - writer.elapsed
+
+	finalise := startStopwatch()
+	inputErr := input.Close()
+	closeErr := output.Close()
+
+	if err != nil {
+		if _, ok := errors.AsType[*diagnostic.SyntaxError](err); ok {
+			err = fmt.Errorf("%s:%w", inputPath, err)
+		}
+
+		if inputErr != nil {
+			err = errors.Join(err, fmt.Errorf("error closing input file: %w", inputErr))
+		}
+
+		if closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("error closing output file: %w", closeErr))
+		}
+
+		return err
+	}
+
+	if inputErr != nil {
+		return fmt.Errorf("error closing input file: %w", inputErr)
+	}
+
+	if closeErr != nil {
+		return fmt.Errorf("error creating output file: %w", closeErr)
+	}
+
+	if err := os.Chmod(output.Name(), outputFileMode); err != nil {
+		return fmt.Errorf("error creating output file: %w", err)
+	}
+
+	if err := os.Rename(output.Name(), outputPath); err != nil {
+		return fmt.Errorf("error creating output file: %w", err)
+	}
+	timings.Finalise = finalise.elapsed()
+
+	return nil
 }
 
 func (p *PythonPreprocessor) IndentSize() int {
